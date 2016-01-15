@@ -5,6 +5,12 @@ assemblySettings
 // to regenerate the Java protobuf files, run:
 // protoc -I=$SPARKNET_HOME/caffe/src/caffe/proto/ --java_out=$SPARKNET_HOME/src/main/scala/protobuf/' $SPARKNET_HOME/caffe/src/caffe/proto/caffe.proto
 
+classpathTypes += "maven-plugin"
+
+libraryDependencies += "org.bytedeco" % "javacpp" % "1.1"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1"
+
 libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.5.0"
 
 libraryDependencies += "org.apache.spark" %% "spark-core" % "1.4.1" % "provided"
