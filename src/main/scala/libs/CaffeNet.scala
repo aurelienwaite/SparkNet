@@ -4,6 +4,9 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row}
 import org.bytedeco.javacpp.caffe._
 
+import scala.collection.mutable.Map
+import scala.collection.mutable.MutableList
+
 trait NetInterface {
   def forward(rowIt: Iterator[Row]): Array[Row]
   def forwardBackward(rowIt: Iterator[Row])
@@ -70,5 +73,12 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   def forwardBackward(rowIt: Iterator[Row]) = {
     transformInto(rowIt, inputs)
     caffeNet.ForwardBackward(inputs)
+  }
+
+  def getWeights(): WeightCollection = {
+    return new WeightCollection(Map[String, MutableList[NDArray]](), List[String]())
+  }
+
+  def setWeights(weights: WeightCollection) = {
   }
 }

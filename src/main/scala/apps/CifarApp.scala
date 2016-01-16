@@ -5,6 +5,10 @@ import java.io._
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkConf
 
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{DataFrame, Row}
+import org.bytedeco.javacpp.caffe._
+
 import libs._
 import loaders._
 import preprocessing._
@@ -29,6 +33,7 @@ object CifarApp {
       .set("spark.driver.maxResultSize", "5G")
       .set("spark.task.maxFailures", "1")
     val sc = new SparkContext(conf)
+    val sqlContext = new org.apache.spark.sql.SQLContext(sc)
 
     val sparkNetHome = sys.env("SPARKNET_HOME")
 
@@ -51,27 +56,31 @@ object CifarApp {
     log("loading test data")
     var testRDD = sc.parallelize(loader.testImages.zip(loader.testLabels))
 
+    // playing around with dataframes
+    val schema = StructType(StructField("im", ArrayType(FloatType), false) :: StructField("label", IntegerType, false) :: Nil)
+    var trainDF = sqlContext.createDataFrame(trainRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
+    var testDF = sqlContext.createDataFrame(testRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
+    //trainDF.take(1)(0)(0).asInstanceOf[Seq[Float]].toArray
+    /*
+    val schema = StructType(StructField("im", BinaryType, false) :: StructField("label", IntegerType, false) :: Nil)
+    val trainDF = sqlContext.createDataFrame(trainRDD.map{ case (a, b) => Row(a, b)}, schema)
+    trainDF.take(1)(0)(0).asInstanceOf[Array[Byte]]
+    */
+
     log("repartition data")
-    trainRDD = trainRDD.repartition(numWorkers)
-    testRDD = testRDD.repartition(numWorkers)
+    trainDF = trainDF.repartition(numWorkers)
+    testDF = testDF.repartition(numWorkers)
 
-    log("processing train data")
-    val trainConverter = new ScaleAndConvert(trainBatchSize, height, width)
-    var trainMinibatchRDD = trainConverter.makeMinibatchRDDWithoutCompression(trainRDD).persist()
-    val numTrainMinibatches = trainMinibatchRDD.count()
-    log("numTrainMinibatches = " + numTrainMinibatches.toString)
+    val numTrainData = trainDF.count()
+    log("numTrainData = " + numTrainData.toString)
 
-    log("processing test data")
-    val testConverter = new ScaleAndConvert(testBatchSize, height, width)
-    var testMinibatchRDD = testConverter.makeMinibatchRDDWithoutCompression(testRDD).persist()
-    val numTestMinibatches = testMinibatchRDD.count()
-    log("numTestMinibatches = " + numTestMinibatches.toString)
+    val numTestData = testDF.count()
+    log("numTestData = " + numTestData.toString)
 
-    val numTrainData = numTrainMinibatches * trainBatchSize
-    val numTestData = numTestMinibatches * testBatchSize
-
-    val trainPartitionSizes = trainMinibatchRDD.mapPartitions(iter => Array(iter.size).iterator).persist()
-    val testPartitionSizes = testMinibatchRDD.mapPartitions(iter => Array(iter.size).iterator).persist()
+    val trainPartitionSizes = trainDF.mapPartitions(iter => Array(iter.size).iterator).persist()
+    val testPartitionSizes = testDF.mapPartitions(iter => Array(iter.size).iterator).persist()
+    trainPartitionSizes.foreach(size => workerStore.put("trainPartitionSize", size))
+    testPartitionSizes.foreach(size => workerStore.put("testPartitionSize", size))
     log("trainPartitionSizes = " + trainPartitionSizes.collect().deep.toString)
     log("testPartitionSizes = " + testPartitionSizes.collect().deep.toString)
 
@@ -79,58 +88,46 @@ object CifarApp {
 
     // initialize nets on workers
     workers.foreach(_ => {
-      System.load(sparkNetHome + "/build/libccaffe.so")
-      val caffeLib = CaffeLibrary.INSTANCE
-      var netParameter = ProtoLoader.loadNetPrototxt(sparkNetHome + "/caffe/examples/cifar10/cifar10_full_train_test.prototxt")
-      netParameter = ProtoLoader.replaceDataLayers(netParameter, trainBatchSize, testBatchSize, channels, height, width)
-      val solverParameter = ProtoLoader.loadSolverPrototxtWithNet(sparkNetHome + "/caffe/examples/cifar10/cifar10_full_solver.prototxt", netParameter, None)
-      val net = CaffeNet(caffeLib, solverParameter)
-      workerStore.setNet("net", net)
+      val model = sparkNetHome + "models/adult/adult.prototxt"
+      val netParam = new NetParameter()
+      ReadProtoFromTextFileOrDie(model, netParam)
+      val net = new JavaCPPCaffeNet(netParam, trainDF.schema, new DefaultPreprocessor(trainDF.schema))
+      workerStore.put("net", net)
     })
 
     // initialize weights on master
-    var netWeights = workers.map(_ => workerStore.getNet("net").getWeights()).collect()(0)
+    var netWeights = workers.map(_ => workerStore.get[JavaCPPCaffeNet]("net").getWeights()).collect()(0)
 
     var i = 0
     while (true) {
       log("broadcasting weights", i)
       val broadcastWeights = sc.broadcast(netWeights)
       log("setting weights on workers", i)
-      workers.foreach(_ => workerStore.getNet("net").setWeights(broadcastWeights.value))
+      workers.foreach(_ => workerStore.get[JavaCPPCaffeNet]("net").setWeights(broadcastWeights.value))
 
       if (i % 10 == 0) {
         log("testing, i")
-        val testScores = testPartitionSizes.zipPartitions(testMinibatchRDD) (
-          (lenIt, testMinibatchIt) => {
-            assert(lenIt.hasNext && testMinibatchIt.hasNext)
-            val len = lenIt.next
-            assert(!lenIt.hasNext)
-            val minibatchSampler = new MinibatchSampler(testMinibatchIt, len, len)
-            workerStore.getNet("net").setTestData(minibatchSampler, len, None)
-            Array(workerStore.getNet("net").test()).iterator // do testing
-          }
+        val testScores = testDF.mapPartitions(
+          testIt => workerStore.get[JavaCPPCaffeNet]("net").forward(testIt).iterator
         ).cache()
-        val testScoresAggregate = testScores.reduce((a, b) => (a, b).zipped.map(_ + _))
-        val accuracies = testScoresAggregate.map(v => 100F * v / numTestMinibatches)
-        log("%.2f".format(accuracies(0)) + "% accuracy", i)
       }
 
       log("training", i)
       val syncInterval = 10
-      trainPartitionSizes.zipPartitions(trainMinibatchRDD) (
-        (lenIt, trainMinibatchIt) => {
-          assert(lenIt.hasNext && trainMinibatchIt.hasNext)
-          val len = lenIt.next
-          assert(!lenIt.hasNext)
-          val minibatchSampler = new MinibatchSampler(trainMinibatchIt, len, syncInterval)
-          workerStore.getNet("net").setTrainData(minibatchSampler, None)
-          workerStore.getNet("net").train(syncInterval)
-          Array(0).iterator
+      trainDF.foreachPartition(
+        trainIt => {
+          val r = scala.util.Random
+          val len = workerStore.get[Int]("trainPartitionSize")
+          val startIdx = r.nextInt(len - syncInterval * trainBatchSize)
+          val it = trainIt.drop(startIdx)
+          for (j <- 0 to syncInterval) {
+            workerStore.get[JavaCPPCaffeNet]("net").forwardBackward(it)
+          }
         }
-      ).foreachPartition(_ => ())
+      )
 
       log("collecting weights", i)
-      netWeights = workers.map(_ => { workerStore.getNet("net").getWeights() }).reduce((a, b) => WeightCollection.add(a, b))
+      netWeights = workers.map(_ => { workerStore.get[JavaCPPCaffeNet]("net").getWeights() }).reduce((a, b) => WeightCollection.add(a, b))
       netWeights.scalarDivide(1F * numWorkers)
       i += 1
     }
