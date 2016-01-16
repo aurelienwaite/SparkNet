@@ -25,6 +25,8 @@ libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" c
 
 libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.5.0"
 
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.4.1"
+
 libraryDependencies += "org.apache.spark" %% "spark-core" % "1.4.1" % "provided"
 
 libraryDependencies += "net.java.dev.jna" % "jna" % "4.2.1"
