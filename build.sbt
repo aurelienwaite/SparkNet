@@ -10,6 +10,18 @@ classpathTypes += "maven-plugin"
 libraryDependencies += "org.bytedeco" % "javacpp" % "1.1"
 
 libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "linux-x86"
+libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "linux-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "macosx-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "windows-x86"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "windows-x86_64"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "linux-x86"
+libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "linux-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "macosx-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "windows-x86"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "windows-x86_64"
 
 libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.5.0"
 
