@@ -19,7 +19,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   private val columnNames = schema.map(entry => entry.name)
   private val caffeNet = new FloatNet(netParam)
 
-  for (i <- 0 to inputSize) {
+  for (i <- 0 to inputSize - 1) {
     val name = netParam.input(i).getString
     transformations(i) = preprocessor.convert(name)
     inputIndices(i) = columnNames.indexOf(name)
@@ -27,7 +27,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
 
   // Preallocate a buffer for data input into the net
   val inputs = new FloatBlobVector(inputSize)
-  for (i <- 0 to inputSize) {
+  for (i <- 0 to inputSize - 1) {
     val dims = new Array[Int](netParam.input_shape(i).dim_size)
     for (j <- dims.indices) {
       dims(j) = netParam.input_shape(i).dim(j).toInt
@@ -39,7 +39,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     var batchIndex = 0
     while (iterator.hasNext) {
       val row = iterator.next
-      for (i <- 0 to inputSize) {
+      for (i <- 0 to inputSize - 1) {
         val result = transformations(i)(row(inputIndices(i)))
         val flatArray = result.toFlat() // TODO: Make this efficient
         val blob = data.get(i)

@@ -8,7 +8,7 @@ trait Preprocessor {
   def convert(name: String): Any => NDArray
 }
 
-class DefaultPreprocessor(schema: StructType) {
+class DefaultPreprocessor(schema: StructType) extends Preprocessor {
   def convert(name: String): Any => NDArray = {
     schema(name).dataType match {
       case FloatType => (element: Any) => {
