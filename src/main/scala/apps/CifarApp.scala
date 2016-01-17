@@ -89,7 +89,7 @@ object CifarApp {
     // initialize nets on workers
     workers.foreach(_ => {
       val netParam = new NetParameter()
-      ReadProtoFromTextFileOrDie(sparkNetHome + "models/adult/adult.prototxt", netParam)
+      ReadProtoFromTextFileOrDie(sparkNetHome + "/models/adult/adult.prototxt", netParam)
       val net = new JavaCPPCaffeNet(netParam, trainDF.schema, new DefaultPreprocessor(trainDF.schema))
       workerStore.put("net", net)
     })
