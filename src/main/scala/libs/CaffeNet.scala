@@ -22,7 +22,12 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   private val inputIndices = new Array[Int](inputSize)
   private val columnNames = schema.map(entry => entry.name)
   private val caffeNet = new FloatNet(netParam)
+
   private val numOutputs = caffeNet.num_outputs
+  private val numLayers = caffeNet.layers().size.toInt
+  private val layerNames = List.range(0, numLayers).map(i => caffeNet.layers.get(i).layer_param.name.getString)
+  private val numLayerBlobs = List.range(0, numLayers).map(i => caffeNet.layers.get(i).blobs().size.toInt)
+
 
   for (i <- 0 to inputSize - 1) {
     val name = netParam.input(i).getString
@@ -82,39 +87,32 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   }
 
   def getWeights(): WeightCollection = {
-
-    return new WeightCollection(Map[String, MutableList[NDArray]](), List[String]())
+    val weights = Map[String, MutableList[NDArray]]()
+    for (i <- 0 to numLayers - 1) {
+      val weightList = MutableList[NDArray]()
+      for (j <- 0 to numLayerBlobs(i) - 1) {
+        val blob = caffeNet.layers().get(i).blobs().get(j)
+        val shape = getShape(blob)
+        val data = new Array[Float](shape.product)
+        blob.cpu_data.get(data, 0, data.length)
+        weightList += NDArray(data, shape)
+      }
+      weights += (layerNames(i) -> weightList)
+    }
+    return new WeightCollection(weights, layerNames)
   }
 
   def setWeights(weights: WeightCollection) = {
-    // TODO: check that weights.keys agrees with netParam, or something like that
-    for (i <- 0 to caffeNet.layers().size.toInt) {
-      for (j <- 0 to caffeNet.layers().get(i).blobs().size.toInt) {
+    assert(weights.numLayers == numLayers)
+    for (i <- 0 to numLayers - 1) {
+      for (j <- 0 to numLayerBlobs(i) - 1) {
         val blob = caffeNet.layers().get(i).blobs().get(j)
         val shape = getShape(blob)
+        assert(shape.deep == weights.allWeights(layerNames(i))(j).shape.deep) // check that weights are the correct shape
+        val flatWeights = weights.allWeights(layerNames(i))(j).toFlat() // this allocation can be avoided
+        blob.cpu_data.put(flatWeights, 0, flatWeights.length)
       }
     }
-
-    // TODO: incomplete
-
-    /*
-    for (i <- 0 to numLayers - 1) {
-      assert(allWeights.allWeights(layerNames(i)).length == layerNumBlobs(i)) // check that we have the correct number of weights
-      for (j <- 0 to layerNumBlobs(i) - 1) {
-        val blob = caffeLib.get_weight_blob(state, i, j)
-        val shape = getShape(blob)
-        assert(shape.deep == allWeights.allWeights(layerNames(i))(j).shape.deep) // check that weights are the correct shape
-        val flatWeights = allWeights.allWeights(layerNames(i))(j).toFlat() // this allocation can be avoided
-        val blob_pointer = caffeLib.get_data(blob)
-        val size = shape.product
-        var t = 0
-        while (t < size) {
-          blob_pointer.setFloat(dtypeSize * t, flatWeights(t))
-          t += 1
-        }
-      }
-    }
-    */
   }
 
   private def getShape(blob: FloatBlob): Array[Int] = {
