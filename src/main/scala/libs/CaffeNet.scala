@@ -24,7 +24,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
 
   for (i <- 0 to inputSize - 1) {
     val name = netParam.input(i).getString
-    transformations(i) = preprocessor.convert(name)
+    transformations(i) = preprocessor.convert(name, getInputShape(i))
     inputIndices(i) = columnNames.indexOf(name)
   }
 
@@ -76,9 +76,56 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   }
 
   def getWeights(): WeightCollection = {
+
     return new WeightCollection(Map[String, MutableList[NDArray]](), List[String]())
   }
 
   def setWeights(weights: WeightCollection) = {
+    // TODO: check that weights.keys agrees with netParam, or something like that
+    for (i <- 0 to caffeNet.layers().size.toInt) {
+      for (j <- 0 to caffeNet.layers().get(i).blobs().size.toInt) {
+        val blob = caffeNet.layers().get(i).blobs().get(j)
+        val shape = getShape(blob)
+      }
+    }
+
+    // TODO: incomplete
+
+    /*
+    for (i <- 0 to numLayers - 1) {
+      assert(allWeights.allWeights(layerNames(i)).length == layerNumBlobs(i)) // check that we have the correct number of weights
+      for (j <- 0 to layerNumBlobs(i) - 1) {
+        val blob = caffeLib.get_weight_blob(state, i, j)
+        val shape = getShape(blob)
+        assert(shape.deep == allWeights.allWeights(layerNames(i))(j).shape.deep) // check that weights are the correct shape
+        val flatWeights = allWeights.allWeights(layerNames(i))(j).toFlat() // this allocation can be avoided
+        val blob_pointer = caffeLib.get_data(blob)
+        val size = shape.product
+        var t = 0
+        while (t < size) {
+          blob_pointer.setFloat(dtypeSize * t, flatWeights(t))
+          t += 1
+        }
+      }
+    }
+    */
+  }
+
+  private def getShape(blob: FloatBlob): Array[Int] = {
+    val numAxes = blob.num_axes()
+    val shape = new Array[Int](numAxes)
+    for (k <- 0 to numAxes - 1) {
+      shape(k) = blob.shape(k)
+    }
+    return shape
+  }
+
+  private def getInputShape(i: Int): Array[Int] = {
+    val numAxes = netParam.input_shape(i).dim_size - 1
+    val shape = new Array[Int](numAxes)
+    for (j <- 0 to numAxes - 1) {
+      shape(j) = netParam.input_shape(i).dim(j + 1).toInt
+    }
+    return shape
   }
 }

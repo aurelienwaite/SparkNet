@@ -57,7 +57,7 @@ object CifarApp {
     var testRDD = sc.parallelize(loader.testImages.zip(loader.testLabels))
 
     // playing around with dataframes
-    val schema = StructType(StructField("im", ArrayType(FloatType), false) :: StructField("label", IntegerType, false) :: Nil)
+    val schema = StructType(StructField("data", ArrayType(FloatType), false) :: StructField("label", IntegerType, false) :: Nil)
     var trainDF = sqlContext.createDataFrame(trainRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
     var testDF = sqlContext.createDataFrame(testRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
     //trainDF.take(1)(0)(0).asInstanceOf[Seq[Float]].toArray
@@ -88,9 +88,8 @@ object CifarApp {
 
     // initialize nets on workers
     workers.foreach(_ => {
-      val model = sparkNetHome + "models/adult/adult.prototxt"
       val netParam = new NetParameter()
-      ReadProtoFromTextFileOrDie(model, netParam)
+      ReadProtoFromTextFileOrDie(sparkNetHome + "models/adult/adult.prototxt", netParam)
       val net = new JavaCPPCaffeNet(netParam, trainDF.schema, new DefaultPreprocessor(trainDF.schema))
       workerStore.put("net", net)
     })
