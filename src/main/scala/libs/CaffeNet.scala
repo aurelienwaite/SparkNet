@@ -12,6 +12,7 @@ trait NetInterface {
   def forwardBackward(rowIt: Iterator[Row])
   def getWeights(): WeightCollection
   def setWeights(weights: WeightCollection)
+  def outputSchema(): StructType
 }
 
 class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: Preprocessor) {
@@ -21,6 +22,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   private val inputIndices = new Array[Int](inputSize)
   private val columnNames = schema.map(entry => entry.name)
   private val caffeNet = new FloatNet(netParam)
+  private val numOutputs = caffeNet.num_outputs
 
   for (i <- 0 to inputSize - 1) {
     val name = netParam.input(i).getString
@@ -62,10 +64,14 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     val result = new Array[Array[Float]](batchSize)
     transformInto(rowIt, inputs)
     val tops = caffeNet.Forward(inputs)
-    for (i <- 0 to batchSize) {
-      val top = tops.get(i).cpu_data()
-      val array = Array[Float](top.position())
-      top.get(result(i))
+    for (i <- 0 to batchSize - 1) {
+      val top = tops.get(0)
+      val shape = Array.range(0, top.num_axes).map(i => top.shape.get(i))
+      val array = new Array[Float](shape.product)
+      val data = top.cpu_data()
+      data.get(array)
+      print("len of array ", array.length)
+      result(i) = array
     }
     return result.map(row => Row(row))
   }
@@ -80,5 +86,13 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   }
 
   def setWeights(weights: WeightCollection) = {
+  }
+
+  def outputSchema(): StructType = {
+    val fields = Array.range(0, numOutputs).map(i => {
+      val output = caffeNet.blob_names().get(caffeNet.output_blob_indices().get(i)).getString
+      new StructField(output, DataTypes.createArrayType(DataTypes.FloatType), false)
+    })
+    StructType(fields)
   }
 }
