@@ -135,7 +135,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
 
   def outputSchema(): StructType = {
     val fields = Array.range(0, numOutputs).map(i => {
-      val output = caffeNet.blob_names().get(caffeNet.output_blob_indices().get(i)).getString.toString
+      val output = caffeNet.blob_names().get(caffeNet.output_blob_indices().get(i)).getString
       new StructField(output, DataTypes.createArrayType(DataTypes.FloatType), false)
     })
     StructType(fields)
