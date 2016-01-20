@@ -20,12 +20,9 @@ class DefaultPreprocessor(schema: StructType) extends Preprocessor {
       case IntegerType => (element: Any) => {
         NDArray(Array[Float](element.asInstanceOf[Int].toFloat), shape)
       }
-      case array: ArrayType =>
-        array.elementType match {
-          case FloatType => (element: Any) => {
-            NDArray(element.asInstanceOf[Array[Float]], shape)
-          }
-        }
+      case ArrayType(FloatType, true) => (element: Any) => {
+        NDArray(element.asInstanceOf[Seq[Float]].toArray, shape)
+      }
     }
   }
 }
