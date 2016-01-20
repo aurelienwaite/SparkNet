@@ -6,6 +6,7 @@ import org.bytedeco.javacpp.caffe._
 
 import scala.collection.mutable.Map
 import scala.collection.mutable.MutableList
+import java.util.Arrays
 
 trait NetInterface {
   def forward(rowIt: Iterator[Row]): Array[Row]
@@ -22,6 +23,8 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   private val inputIndices = new Array[Int](inputSize)
   private val columnNames = schema.map(entry => entry.name)
   private val caffeNet = new FloatNet(netParam)
+  private val inputRefs = new Array[FloatBlob](inputSize)
+  def getNet = caffeNet // TODO: For debugging
   private val numOutputs = caffeNet.num_outputs
 
   for (i <- 0 to inputSize - 1) {
@@ -37,7 +40,10 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     for (j <- dims.indices) {
       dims(j) = netParam.input_shape(i).dim(j).toInt
     }
-    inputs.put(i, new FloatBlob(dims))
+    // prevent input blobs from being GCed
+    // see https://github.com/bytedeco/javacpp-presets/issues/140
+    inputRefs(i) = new FloatBlob(dims)
+    inputs.put(i, inputRefs(i))
   }
 
   def transformInto(iterator: Iterator[Row], data: FloatBlobVector): Unit = {
@@ -49,9 +55,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
         val flatArray = result.toFlat() // TODO: Make this efficient
         val blob = data.get(i)
         val buffer = blob.cpu_data()
-        val offset = blob.offset(batchIndex)
-        buffer.position(offset)
-        buffer.put(flatArray: _*)
+        buffer.put(flatArray, batchIndex * flatArray.length, (batchIndex + 1) * flatArray.length)
       }
       batchIndex += 1
       if (batchIndex == batchSize) {
@@ -70,7 +74,6 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
       val array = new Array[Float](shape.product)
       val data = top.cpu_data()
       data.get(array)
-      print("len of array ", array.length)
       result(i) = array
     }
     return result.map(row => Row(row))
@@ -138,7 +141,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   def outputSchema(): StructType = {
     val fields = Array.range(0, numOutputs).map(i => {
       val output = caffeNet.blob_names().get(caffeNet.output_blob_indices().get(i)).getString
-      new StructField(output, DataTypes.createArrayType(DataTypes.FloatType), false)
+      new StructField(new String(output), DataTypes.createArrayType(DataTypes.FloatType), false)
     })
     StructType(fields)
   }

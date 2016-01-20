@@ -17,8 +17,8 @@ class LoadSqlDatasetSpec extends FlatSpec {
     val df = sqlContext.read.format("com.databricks.spark.csv").option("inferSchema", "true").load(dataset)
     val preprocessor = new DefaultPreprocessor(df.schema)
 
-    val function0 = preprocessor.convert("C0")
-    val function2 = preprocessor.convert("C2")
+    val function0 = preprocessor.convert("C0", Array[Int](1))
+    val function2 = preprocessor.convert("C2", Array[Int](1))
     val result0 = function0(df.take(1)(0)(0))
     val result2 = function2(df.take(1)(0)(2))
 
