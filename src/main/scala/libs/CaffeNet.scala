@@ -23,7 +23,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   private val inputIndices = new Array[Int](inputSize)
   private val columnNames = schema.map(entry => entry.name)
   private val caffeNet = new FloatNet(netParam)
-  private val inputRefs = new Array[FloatBlob](inputSize)
+  private val inputRef = new Array[FloatBlob](inputSize)
   def getNet = caffeNet // TODO: For debugging
 
   private val numOutputs = caffeNet.num_outputs
@@ -47,25 +47,31 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     }
     // prevent input blobs from being GCed
     // see https://github.com/bytedeco/javacpp-presets/issues/140
-    inputRefs(i) = new FloatBlob(dims)
-    inputs.put(i, inputRefs(i))
+    inputRef(i) = new FloatBlob(dims)
+    inputs.put(i, inputRef(i))
+  }
+  val inputBuffer = new Array[Array[Float]](inputSize)
+  val inputBufferSize = new Array[Int](inputSize)
+  for (i <- 0 to inputSize - 1) {
+    inputBufferSize(i) = getInputShape(i).product
+    inputBuffer(i) = new Array[Float](inputBufferSize(i) * batchSize)
   }
 
   def transformInto(iterator: Iterator[Row], data: FloatBlobVector): Unit = {
     var batchIndex = 0
-    while (iterator.hasNext) {
+    while (iterator.hasNext && batchIndex != batchSize) {
       val row = iterator.next
       for (i <- 0 to inputSize - 1) {
         val result = transformations(i)(row(inputIndices(i)))
         val flatArray = result.toFlat() // TODO: Make this efficient
-        val blob = data.get(i)
-        val buffer = blob.cpu_data()
-        buffer.put(flatArray, batchIndex * flatArray.length, (batchIndex + 1) * flatArray.length)
+        System.arraycopy(flatArray, 0, inputBuffer(i), batchIndex * inputBufferSize(i), inputBufferSize(i))
       }
       batchIndex += 1
-      if (batchIndex == batchSize) {
-        return
-      }
+    }
+    for (i <- 0 to inputSize - 1) {
+      val blob = data.get(i)
+      val buffer = blob.cpu_data()
+      buffer.put(inputBuffer(i), 0, batchSize * inputBufferSize(i))
     }
   }
 
@@ -73,14 +79,17 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     val result = new Array[Array[Float]](batchSize)
     transformInto(rowIt, inputs)
     val tops = caffeNet.Forward(inputs)
+
+    val top = tops.get(0)
+    val shape = Array.range(1, top.num_axes).map(i => top.shape.get(i)) // skip batch size
+    val size = batchSize * shape.product
+    val scratch = new Array[Float](size)
+    val data = top.cpu_data()
+    data.get(scratch, 0, size)
     for (i <- 0 to batchSize - 1) {
-      val top = tops.get(0)
-      val shape = Array.range(0, top.num_axes).map(i => top.shape.get(i))
-      val array = new Array[Float](shape.product)
-      val data = top.cpu_data()
-      data.get(array)
-      result(i) = array
+      result(i) = Arrays.copyOfRange(scratch, i*shape.product, (i+1)*shape.product)
     }
+
     return result.map(row => Row(row))
   }
 
