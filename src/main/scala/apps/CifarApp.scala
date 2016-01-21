@@ -68,10 +68,8 @@ object CifarApp {
     */
 
     log("repartition data")
-    //trainDF = trainDF.repartition(numWorkers)
-    //testDF = testDF.repartition(numWorkers)
-    trainDF = trainDF.coalesce(numWorkers)
-    testDF = testDF.coalesce(numWorkers)
+    trainDF = trainDF.repartition(numWorkers)
+    testDF = testDF.repartition(numWorkers)
 
     val numTrainData = trainDF.count()
     log("numTrainData = " + numTrainData.toString)
