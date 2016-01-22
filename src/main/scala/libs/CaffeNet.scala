@@ -91,8 +91,14 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   }
 
   def forwardBackward(rowIt: Iterator[Row]) = {
+    print("entering forwardBackward\n")
+    val t1 = System.currentTimeMillis()
     transformInto(rowIt, inputs)
+    val t2 = System.currentTimeMillis()
+    print("transformInto took " + ((t2 - t1) * 1F / 1000F).toString + " s\n")
     caffeNet.ForwardBackward(inputs)
+    val t3 = System.currentTimeMillis()
+    print("ForwardBackward took " + ((t3 - t2) * 1F / 1000F).toString + " s\n")
   }
 
   def getWeights(): WeightCollection = {
