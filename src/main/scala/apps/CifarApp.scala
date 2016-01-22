@@ -58,16 +58,10 @@ object CifarApp {
     log("loading test data")
     var testRDD = sc.parallelize(loader.testImages.zip(loader.testLabels))
 
-    // playing around with dataframes
+    // convert to dataframes
     val schema = StructType(StructField("data", ArrayType(FloatType), false) :: StructField("label", IntegerType, false) :: Nil)
     var trainDF = sqlContext.createDataFrame(trainRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
     var testDF = sqlContext.createDataFrame(testRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
-    //trainDF.take(1)(0)(0).asInstanceOf[Seq[Float]].toArray
-    /*
-    val schema = StructType(StructField("im", BinaryType, false) :: StructField("label", IntegerType, false) :: Nil)
-    val trainDF = sqlContext.createDataFrame(trainRDD.map{ case (a, b) => Row(a, b)}, schema)
-    trainDF.take(1)(0)(0).asInstanceOf[Array[Byte]]
-    */
 
     log("repartition data")
     trainDF = trainDF.repartition(numWorkers)
@@ -92,7 +86,6 @@ object CifarApp {
     workers.foreach(_ => {
       val netParam = new NetParameter()
       ReadProtoFromTextFileOrDie(sparkNetHome + "/models/cifar10/cifar10_quick.prototxt", netParam)
-      //val net = new JavaCPPCaffeNet(netParam, trainDF.schema, new DefaultPreprocessor(trainDF.schema))
       val net = new JavaCPPCaffeNet(netParam, schema, new DefaultPreprocessor(schema))
       workerStore.put("net", net)
     })
@@ -109,9 +102,19 @@ object CifarApp {
 
       if (i % 10 == 0) {
         log("testing, i")
-        val testScores = testDF.mapPartitions(
-          testIt => workerStore.get[JavaCPPCaffeNet]("net").forward(testIt).iterator
+        val testAccuracies = testDF.mapPartitions(
+          testIt => {
+            val numTestBatches = workerStore.get[Int]("testPartitionSize") / testBatchSize
+            var accuracy = 0F
+            for (j <- 0 to numTestBatches - 1) {
+              val out = workerStore.get[JavaCPPCaffeNet]("net").forward(testIt)
+              accuracy += out("accuracy").get(Array())
+            }
+            Array[Float](accuracy / numTestBatches).iterator
+          }
         ).cache()
+        val accuracy = testAccuracies.sum / numWorkers
+        log("%.2f".format(100F * accuracy) + "% accuracy", i)
       }
 
       log("training", i)
