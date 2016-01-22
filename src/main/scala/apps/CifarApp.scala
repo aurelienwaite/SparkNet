@@ -32,6 +32,8 @@ object CifarApp {
       .setAppName("Cifar")
       .set("spark.driver.maxResultSize", "5G")
       .set("spark.task.maxFailures", "1")
+      .setExecutorEnv("LD_LIBRARY_PATH", "/usr/local/cuda-7.5/lib64")
+
     val sc = new SparkContext(conf)
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
 
