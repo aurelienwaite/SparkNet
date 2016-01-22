@@ -93,19 +93,21 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     return result.map(row => Row(row))
   }
 
-  def forward2(rowIt: Iterator[Row]): Array[Array[Float]] = {
+  def forward2(rowIt: Iterator[Row]): Map[String, Array[Float]] = {
     transformInto(rowIt, inputs)
     val tops = caffeNet.Forward(inputs)
 
-    val result = new Array[Array[Float]](numOutputs)
+    val outputs = Map[String, Array[Float]]()
     for (j <- 0 to numOutputs - 1) {
+      val outputName = caffeNet.blob_names().get(caffeNet.output_blob_indices().get(j)).getString
       val top = tops.get(j)
       val shape = Array.range(0, top.num_axes).map(i => top.shape.get(i))
-      result(j) = new Array[Float](shape.product)
-      top.cpu_data().get(result(j), 0, shape.product)
+      val output = new Array[Float](shape.product)
+      top.cpu_data().get(output, 0, shape.product)
+      outputs += (outputName -> output)
     }
 
-    return result
+    return outputs
   }
 
   def forwardBackward(rowIt: Iterator[Row]) = {
