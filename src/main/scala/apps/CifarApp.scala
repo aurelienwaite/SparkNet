@@ -100,7 +100,7 @@ object CifarApp {
       log("setting weights on workers", i)
       workers.foreach(_ => workerStore.get[JavaCPPCaffeNet]("net").setWeights(broadcastWeights.value))
 
-      if (i % 10 == 0) {
+      if (i % 5 == 0) {
         log("testing, i")
         val testAccuracies = testDF.mapPartitions(
           testIt => {
@@ -125,7 +125,7 @@ object CifarApp {
           val len = workerStore.get[Int]("trainPartitionSize")
           val startIdx = r.nextInt(len - syncInterval * trainBatchSize)
           val it = trainIt.drop(startIdx)
-          for (j <- 0 to syncInterval) {
+          for (j <- 0 to syncInterval - 1) {
             workerStore.get[JavaCPPCaffeNet]("net").forwardBackward(it)
           }
         }
