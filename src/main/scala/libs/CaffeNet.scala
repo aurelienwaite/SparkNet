@@ -93,32 +93,19 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     return result.map(row => Row(row))
   }
 
-  def forward2(rowIt: Iterator[Row]): Any = {
-    val result = new Array[Array[Array[Float]]](batchSize)
+  def forward2(rowIt: Iterator[Row]): Array[Array[Float]] = {
     transformInto(rowIt, inputs)
     val tops = caffeNet.Forward(inputs)
 
-    return tops
-
-    /*
-    val scratch = new Array[Array[Float]](numOutputs)
+    val result = new Array[Array[Float]](numOutputs)
     for (j <- 0 to numOutputs - 1) {
-      val shape = Array.range(1, top.num_axes).map(i => top.shape.get(i)) // skip batch size
-      val size = batchSize * shape.product
-      scratch(j) = new Array[size]
-      tops.get(j).cpu_data().get(scratch(j), 0, size)
+      val top = tops.get(j)
+      val shape = Array.range(0, top.num_axes).map(i => top.shape.get(i))
+      result(j) = new Array[Float](shape.product)
+      top.cpu_data().get(result(j), 0, shape.product)
     }
 
-    for (i <- 0 to batchSize - 1) {
-      result2(i) = new Array[Array[Float]](numOutputs)
-      for (j <- 0 to numOutputs - 1) {
-        result2(i)(j) = tops.get(j).cpu_data().get( , 0, )
-      }
-      result2(i) = Arrays.copyOfRange(scratch, i*shape.product, (i + 1) * shape.product)
-    }
-
-    return result.map(row => Row(row))
-    */
+    return result
   }
 
   def forwardBackward(rowIt: Iterator[Row]) = {
