@@ -75,25 +75,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
     }
   }
 
-  def forward(rowIt: Iterator[Row]): Array[Row] = {
-    val result = new Array[Array[Float]](batchSize)
-    transformInto(rowIt, inputs)
-    val tops = caffeNet.Forward(inputs)
-
-    val top = tops.get(0)
-    val shape = Array.range(1, top.num_axes).map(i => top.shape.get(i)) // skip batch size
-    val size = batchSize * shape.product
-    val scratch = new Array[Float](size)
-    val data = top.cpu_data()
-    data.get(scratch, 0, size)
-    for (i <- 0 to batchSize - 1) {
-      result(i) = Arrays.copyOfRange(scratch, i * shape.product, (i + 1) * shape.product)
-    }
-
-    return result.map(row => Row(row))
-  }
-
-  def forward2(rowIt: Iterator[Row]): Map[String, Array[Float]] = {
+  def forward(rowIt: Iterator[Row]): Map[String, Array[Float]] = {
     transformInto(rowIt, inputs)
     val tops = caffeNet.Forward(inputs)
 
