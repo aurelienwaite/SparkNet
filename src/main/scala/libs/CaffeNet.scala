@@ -31,6 +31,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   private val layerNames = List.range(0, numLayers).map(i => caffeNet.layers.get(i).layer_param.name.getString)
   private val numLayerBlobs = List.range(0, numLayers).map(i => caffeNet.layers.get(i).blobs().size.toInt)
 
+  Caffe.set_mode(Caffe.GPU)    
 
   for (i <- 0 to inputSize - 1) {
     val name = netParam.input(i).getString
@@ -76,7 +77,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   }
 
   def forward(rowIt: Iterator[Row]): Map[String, NDArray] = {
-    Caffe.set_mode(Caffe.GPU)
+    // Caffe.set_mode(Caffe.GPU)
     transformInto(rowIt, inputs)
     val tops = caffeNet.Forward(inputs)
     val outputs = Map[String, NDArray]()
@@ -92,7 +93,7 @@ class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: 
   }
 
   def forwardBackward(rowIt: Iterator[Row]) = {
-    Caffe.set_mode(Caffe.GPU)
+    // Caffe.set_mode(Caffe.GPU)
     print("entering forwardBackward\n")
     val t1 = System.currentTimeMillis()
     transformInto(rowIt, inputs)
