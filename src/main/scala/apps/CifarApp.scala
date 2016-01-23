@@ -64,8 +64,8 @@ object CifarApp {
     var testDF = sqlContext.createDataFrame(testRDD.map{ case (a, b) => Row(a.map(x => x.toFloat), b)}, schema)
 
     log("repartition data")
-    trainDF = trainDF.repartition(numWorkers)
-    testDF = testDF.repartition(numWorkers)
+    trainDF = trainDF.repartition(numWorkers).cache()
+    testDF = testDF.repartition(numWorkers).cache()
 
     val numTrainData = trainDF.count()
     log("numTrainData = " + numTrainData.toString)
@@ -130,7 +130,6 @@ object CifarApp {
           print("stuff took " + ((t2 - t1) * 1F / 1000F).toString + " s\n")
           for (j <- 0 to syncInterval - 1) {
             workerStore.get[JavaCPPCaffeNet]("net").forwardBackward(it)
-            val t = System.currentTimeMillis()
             val t3 = System.currentTimeMillis()
             print("iter took " + ((t3 - t2) * 1F / 1000F).toString + " s\n")
           }
