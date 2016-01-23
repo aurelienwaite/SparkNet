@@ -121,12 +121,16 @@ object CifarApp {
       val syncInterval = 10
       trainDF.foreachPartition(
         trainIt => {
+          val t0 = System.currentTimeMillis()
           val r = scala.util.Random
           val len = workerStore.get[Int]("trainPartitionSize")
           val startIdx = r.nextInt(len - syncInterval * trainBatchSize)
           val it = trainIt.drop(startIdx)
+          log("after preprocessing", i)
           for (j <- 0 to syncInterval - 1) {
             workerStore.get[JavaCPPCaffeNet]("net").forwardBackward(it)
+            val t = System.currentTimeMillis()
+            log("after iteration " + j.toString, i)
           }
         }
       )
