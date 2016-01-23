@@ -16,13 +16,19 @@ trait NetInterface {
   def outputSchema(): StructType
 }
 
-class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: Preprocessor) {
+object CaffeNet {
+  def apply(netParam: NetParameter, schema: StructType, preprocessor: Preprocessor): JavaCPPCaffeNet = {
+    return new JavaCPPCaffeNet(netParam, schema, preprocessor, new FloatNet(netParam))
+  }
+}
+
+class JavaCPPCaffeNet(netParam: NetParameter, schema: StructType, preprocessor: Preprocessor, caffeNet: FloatNet) {
   private val inputSize = netParam.input_size
   private val batchSize = netParam.input_shape(0).dim(0).toInt
   private val transformations = new Array[Any => NDArray](inputSize)
   private val inputIndices = new Array[Int](inputSize)
   private val columnNames = schema.map(entry => entry.name)
-  private val caffeNet = new FloatNet(netParam)
+  // private val caffeNet = new FloatNet(netParam)
   private val inputRef = new Array[FloatBlob](inputSize)
   def getNet = caffeNet // TODO: For debugging
 
