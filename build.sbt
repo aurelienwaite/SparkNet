@@ -7,7 +7,7 @@ assemblySettings
 
 libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.5.0"
 
-libraryDependencies += "org.apache.spark" %% "spark-core" % "1.4.1" % "provided"
+libraryDependencies += "org.apache.spark" %% "spark-mllib" % "1.6.0" % "provided"
 
 libraryDependencies += "net.java.dev.jna" % "jna" % "4.2.1"
 
@@ -23,6 +23,8 @@ libraryDependencies ++= Seq("com.twelvemonkeys.imageio" % "imageio" % "3.1.2",
 libraryDependencies += "com.twelvemonkeys.imageio" % "imageio-metadata" % "3.1.2"
 libraryDependencies += "com.twelvemonkeys.imageio" % "imageio-core" % "3.1.2"
 libraryDependencies += "com.twelvemonkeys.common" % "common-lang" % "3.1.2"
+
+libraryDependencies += "com.github.scopt" %% "scopt" % "3.3.0"
 
 // the following is needed to make spark more compatible with amazon's aws package
 dependencyOverrides ++= Set(
