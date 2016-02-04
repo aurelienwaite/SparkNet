@@ -5,9 +5,9 @@ import scala.util.Random
 
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkConf
-import org.apache.spark.storage.StorageLevel
 
 import libs._
+import CaffeNet._
 import loaders._
 import preprocessing._
 

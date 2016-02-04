@@ -6,6 +6,7 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkConf
 
 import libs._
+import CaffeNet._
 import loaders._
 import preprocessing._
 

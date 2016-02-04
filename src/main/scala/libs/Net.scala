@@ -1,5 +1,8 @@
 package libs
 
+import java.io.File
+import java.net.URLDecoder
+
 import scala.util.Random
 
 import com.sun.jna.Pointer
@@ -11,11 +14,22 @@ import caffe._
 import caffe.Caffe._
 import libs._
 
-trait MakeCallbacks[DATA, LABEL] {
+trait MakeCallbacks[DATA] {
 
-  def makeLabelCallback(minibatchSampler: MinibatchSampler[DATA, LABEL]) : CaffeLibrary.java_callback_t
+  def makeLabelCallback(sizes : Sizes, minibatchSampler: MinibatchSampler[_, Int]): CaffeLibrary.java_callback_t = {
+    return new CaffeLibrary.java_callback_t {
+      import sizes._
+      def invoke(data: Pointer, batchSize: Int, numDims: Int, shape: Pointer) {
+        val currentLabelBatch = minibatchSampler.nextLabelMinibatch()
+        assert(currentLabelBatch.length == batchSize)
+        for (j <- 0 to batchSize - 1) {
+          data.setFloat(j * dtypeSize, 1F * currentLabelBatch(j))
+        }
+      }
+    }
+  }
 
-  def makeDataCallback(minibatchSampler: MinibatchSampler[DATA, LABEL],
+  def makeDataCallback(sizes : Sizes, minibatchSampler: MinibatchSampler[DATA, _],
                        preprocessing: Option[(DATA, Array[Float]) => Unit] = None) : CaffeLibrary.java_callback_t
 }
 
@@ -56,17 +70,15 @@ object WeightCollection extends java.io.Serializable {
   }
 }
 
-trait Net[DATA, LABEL] {
+trait Net {
 
-  type Preprocessor = (DATA, Array[Float]) => Unit
+  type Preprocessor[DATA] = (DATA, Array[Float]) => Unit
 
-  type MBSampler = MinibatchSampler[DATA, LABEL]
+  def setTrainData[DATA](minibatchSampler: MinibatchSampler[DATA, Int],
+                   trainPreprocessing: Option[Preprocessor[DATA]] = None)(implicit m: MakeCallbacks[DATA])
 
-  def setTrainData(minibatchSampler: MBSampler,
-                   trainPreprocessing: Option[Preprocessor] = None)(implicit m: MakeCallbacks[DATA, LABEL])
-
-  def setTestData(minibatchSampler: MBSampler,
-                  len: Int, testPreprocessing: Option[Preprocessor] = None)(implicit m: MakeCallbacks[DATA, LABEL])
+  def setTestData[DATA](minibatchSampler: MinibatchSampler[DATA, Int],
+                  len: Int, testPreprocessing: Option[Preprocessor[DATA]] = None)(implicit m: MakeCallbacks[DATA])
 
   def train(numSteps: Int)
 
@@ -82,7 +94,9 @@ trait Net[DATA, LABEL] {
 
 }
 
-class CaffeNet[DATA, LABEL](state: Pointer, caffeLib: CaffeLibrary) extends Net[DATA, LABEL] {
+case class Sizes(dtypeSize: Int, intSize: Int)
+
+class CaffeNet(state: Pointer, caffeLib: CaffeLibrary) extends Net{
   val numLayers = caffeLib.num_layers(state)
   val layerNames = List.range(0, numLayers).map(i => caffeLib.layer_name(state, i))
   val layerNumBlobs = List.range(0, numLayers).map(i => caffeLib.num_layer_weights(state, i))
@@ -93,26 +107,26 @@ class CaffeNet[DATA, LABEL](state: Pointer, caffeLib: CaffeLibrary) extends Net[
   var imageTestCallback : Option[CaffeLibrary.java_callback_t] = None
   var labelTestCallback : Option[CaffeLibrary.java_callback_t] = None
 
-  val dtypeSize: Int = caffeLib.get_dtype_size()
-  val intSize: Int = caffeLib.get_int_size()
+  val sizes = Sizes(dtypeSize = caffeLib.get_dtype_size(), intSize = caffeLib.get_int_size())
+  import sizes._
 
   var numTestBatches = None: Option[Int]
 
 
 
-  override def setTrainData(minibatchSampler: MBSampler, trainPreprocessing: Option[Preprocessor] = None)
-                  (implicit m: MakeCallbacks[DATA, LABEL])= {
-    imageTrainCallback = Option(m.makeDataCallback(minibatchSampler, trainPreprocessing))
-    labelTrainCallback = Option(m.makeLabelCallback(minibatchSampler))
+  override def setTrainData[DATA](minibatchSampler:  MinibatchSampler[DATA, Int], trainPreprocessing: Option[Preprocessor[DATA]] = None)
+                  (implicit m: MakeCallbacks[DATA])= {
+    imageTrainCallback = Option(m.makeDataCallback(sizes, minibatchSampler, trainPreprocessing))
+    labelTrainCallback = Option(m.makeLabelCallback(sizes, minibatchSampler))
     caffeLib.set_train_data_callback(state, 0, imageTrainCallback.get)
     caffeLib.set_train_data_callback(state, 1, labelTrainCallback.get)
   }
 
-  override def setTestData(minibatchSampler: MBSampler, numBatches: Int, testPreprocessing: Option[Preprocessor] = None)
-                              (implicit m: MakeCallbacks[DATA, LABEL])= {
+  override def setTestData[DATA](minibatchSampler:  MinibatchSampler[DATA, Int], numBatches: Int, testPreprocessing: Option[Preprocessor[DATA]] = None)
+                              (implicit m: MakeCallbacks[DATA])= {
     numTestBatches = Some(numBatches)
-    imageTestCallback = Option(m.makeDataCallback(minibatchSampler, testPreprocessing))
-    labelTestCallback = Option(m.makeLabelCallback(minibatchSampler))
+    imageTestCallback = Option(m.makeDataCallback(sizes, minibatchSampler, testPreprocessing))
+    labelTestCallback = Option(m.makeLabelCallback(sizes, minibatchSampler))
     caffeLib.set_test_data_callback(state, 0, imageTestCallback.get)
     caffeLib.set_test_data_callback(state, 1, labelTestCallback.get)
   }
@@ -234,10 +248,11 @@ class CaffeNet[DATA, LABEL](state: Pointer, caffeLib: CaffeLibrary) extends Net[
 
 object CaffeNet {
 
-  implicit val makeImageCallbacks = new MakeCallbacks[ByteImage, Int] {
-    override def makeDataCallback(minibatchSampler: MinibatchSampler[ByteImage, Int],
+  implicit val makeImageCallbacks = new MakeCallbacks[ByteImage] {
+    override def makeDataCallback(sizes : Sizes, minibatchSampler: MinibatchSampler[ByteImage, _],
                                   preprocessing: Option[(ByteImage, Array[Float]) => Unit] = None): CaffeLibrary.java_callback_t = {
       return new CaffeLibrary.java_callback_t() {
+        import sizes._
         def invoke(data: Pointer, batchSize: Int, numDims: Int, shape: Pointer) {
           val currentImageBatch = minibatchSampler.nextImageMinibatch()
           assert(currentImageBatch.length == batchSize)
@@ -264,18 +279,6 @@ object CaffeNet {
         }
       }
     }
-
-    override def makeLabelCallback(minibatchSampler: MinibatchSampler[ByteImage, Int]): CaffeLibrary.java_callback_t = {
-      return new CaffeLibrary.java_callback_t {
-        def invoke(data: Pointer, batchSize: Int, numDims: Int, shape: Pointer) {
-          val currentLabelBatch = minibatchSampler.nextLabelMinibatch()
-          assert(currentLabelBatch.length == batchSize)
-          for (j <- 0 to batchSize - 1) {
-            data.setFloat(j * dtypeSize, 1F * currentLabelBatch(j))
-          }
-        }
-      }
-    }
   }
 
   def apply(caffeLib: CaffeLibrary, solverParameter: SolverParameter): CaffeNet = {
@@ -287,4 +290,17 @@ object CaffeNet {
     caffeLib.load_solver_from_protobuf(state, ptr, byteArr.length)
     return new CaffeNet(state, caffeLib)
   }
+
+  def getSparkNetHome(): Option[String]= {
+    val env = sys.env.get("SPARKNET_HOME")
+    if (env.isDefined) return env
+    val path = classOf[Net].getProtectionDomain().getCodeSource().getLocation().getPath()
+    val decodedPath = new File(URLDecoder.decode(path, "UTF-8"))
+    for{
+      p1 <- Option(decodedPath.getParentFile)
+      p2 <- Option(p1.getParentFile)
+      p3 <- Option(p2.getParent)
+    } yield p3
+  }
+
 }
