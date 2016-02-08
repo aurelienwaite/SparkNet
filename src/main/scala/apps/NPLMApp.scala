@@ -67,6 +67,10 @@ object NPLMApp {
 
   }
 
+  val nplmLevel = new Level(3500, "CaffeNPLM", 4){}
+  val logger = Logger.getLogger(this.getClass)
+  logger.setLevel(nplmLevel)
+  def logNplm(toLog: String): Unit = logger.log(nplmLevel, toLog)
 
   case class Config(
                      numWorkers: Int = -1,
@@ -115,27 +119,24 @@ object NPLMApp {
     val trainSet = sqlContext.read.parquet(trainSetFile)
     //trainSet.show()
     //trainSet.printSchema()
-    val nplmLevel = new Level(3500, "CaffeNPLM", 4){}
-    val logger = Logger.getLogger(this.getClass)
-    logger.setLevel(nplmLevel)
-    def log(toLog: String) = logger.log(nplmLevel, toLog)
+
     val sparkNetHome = sparkNetHomeOpt getOrElse {
       val msg = "Cannot set SparkNet home"
       logger.log(Level.ERROR, msg)
       sys.error(msg)
     }
-    log(s"SparkNet home = $sparkNetHome")
+    logNplm(s"SparkNet home = $sparkNetHome")
 
     import org.apache.spark.sql.functions._
     val getSize = udf((features: linalg.Vector) => features.size)
     val ngramSizes = trainSet.select(getSize(trainSet("features"))).distinct().map(n => n.getAs[Int](0)).collect
     assert(ngramSizes.size == 1, sys.error("NGrams have different history lengths: " + ngramSizes.mkString(",")))
     val ngramSize= ngramSizes(0)
-    log(s"Using ngrams of order ${ngramSize + 1}")
+    logNplm(s"Using ngrams of order ${ngramSize + 1}")
 
     val coalesced = trainSet.repartition(numWorkers)
 
-    log("Creating minibatches")
+    logNplm("Creating minibatches")
     val minibatched = coalesced.mapPartitions{iter =>
       val stream = iter.toStream
       val toVecs = stream.map{ r  =>
@@ -151,18 +152,18 @@ object NPLMApp {
     }.cache()
 
     val numTrainMinibatches = minibatched.count()
-    log(s"Number of minibatches = $numTrainMinibatches")
+    logNplm(s"Number of minibatches = $numTrainMinibatches")
 
     val trainPartitionSizes = minibatched.mapPartitions(iter => Iterator(iter.size))
     val trainPartitionSizesString = trainPartitionSizes.collect().mkString(",")
-    log(s"Minibatches in partitions = $trainPartitionSizesString")
+    logNplm(s"Minibatches in partitions = $trainPartitionSizesString")
 
 
 
     val workers = sc.parallelize(0 until numWorkers, numWorkers)
     val solverBuilder = buildSolverProto(snapshotPrefix)_
     for(w <- workers) {
-      log(sys.env.get("LD_LIBRARY_PATH").getOrElse("LD_LIBRARY_PATH not set"))
+      logNplm(sys.props.get("jna.library.path").getOrElse("jna.library.path not set"))
       System.load(sparkNetHome + "/build/libccaffe.so")
       val caffeLib = CaffeLibrary.INSTANCE
       var netParameter = ProtoLoader.loadNetPrototxt(netPrototext.getAbsolutePath)
@@ -175,9 +176,9 @@ object NPLMApp {
 
     @tailrec
     def iterate(netWeights : WeightCollection, i: Int, totalIterations: Int): WeightCollection= {
-      log("broadcasting weights")
+      logNplm("broadcasting weights")
       val broadcastWeights = sc.broadcast(netWeights)
-      log("setting weights on workers")
+      logNplm("setting weights on workers")
       workers.foreach(_ => workerStore.getNet("net").setWeights(broadcastWeights.value))
 
       /*if (i % 10 == 0) {
@@ -197,7 +198,7 @@ object NPLMApp {
         log("%.2f".format(accuracies(0)) + "% accuracy", i)
       }*/
 
-      log("training")
+      logNplm("training")
       //
 
       trainPartitionSizes.zipPartitions(minibatched) (
@@ -212,7 +213,7 @@ object NPLMApp {
         }
       ).foreachPartition(_ => ())
 
-      log("collecting weights")
+      logNplm("collecting weights")
       val updatedWeights = workers.map(_ => { workerStore.getNet("net").getWeights() }).reduce((a, b) => WeightCollection.add(a, b))
       updatedWeights.scalarDivide(1F * numWorkers)
       if(i >= totalIterations)
@@ -224,6 +225,6 @@ object NPLMApp {
     // initialize weights on master
     var netWeights = workers.map(_ => workerStore.getNet("net").getWeights()).collect()(0)
     iterate(netWeights, 0, 100)
-    log("finished training")
+    logNplm("finished training")
   }
 }
