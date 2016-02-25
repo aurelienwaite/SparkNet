@@ -1,6 +1,7 @@
 package libs
 
-class MinibatchSampler[DATA, LABEL](minibatchIt: Iterator[(Array[DATA], Array[LABEL])], totalNumBatches: Int, numSampledBatches: Int) {
+class MinibatchSampler[DATA, LABEL](minibatchIt: Iterator[(Array[DATA], Array[LABEL])],
+                                    totalNumBatches: Int, numSampledBatches: Int, startPointer: Option[Int] = None) {
   // The purpose of this method is to take minibatchIt, which is an iterator
   // over images and labels, and to turn it into two iterators, one over images
   // and one over labels. The iterator over images is used to create a callback
@@ -15,7 +16,11 @@ class MinibatchSampler[DATA, LABEL](minibatchIt: Iterator[(Array[DATA], Array[LA
 
   var it = minibatchIt // we need to update the iterator by calling it.drop, and we need it to be a var to do this
   val r = scala.util.Random
-  val startIdx = r.nextInt(totalNumBatches - numSampledBatches + 1)
+  val startMapped = startPointer.map(_ * numSampledBatches)
+  val startIdx = if (totalNumBatches == numSampledBatches)
+    0
+  else
+    startMapped.getOrElse(r.nextInt(totalNumBatches - numSampledBatches + 1))
   val indices = Array.range(startIdx, startIdx + numSampledBatches)
   var indicesIndex = 0
   var currMinibatchPosition = -1

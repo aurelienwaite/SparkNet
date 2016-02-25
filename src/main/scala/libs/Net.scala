@@ -47,6 +47,7 @@ class WeightCollection(val allWeights: Map[String, MutableList[NDArray]], val la
   }
 }
 
+
 object WeightCollection extends java.io.Serializable {
   def add(wc1: WeightCollection, wc2: WeightCollection): WeightCollection = {
     assert(wc1.layerNames == wc2.layerNames)
@@ -84,6 +85,8 @@ trait Net {
 
   def test(): Array[Float]
 
+  def test(index: Int) : Float
+
   def forward()
 
   def backward()
@@ -109,7 +112,6 @@ class CaffeNet(state: Pointer, caffeLib: CaffeLibrary) extends Net{
 
   val sizes = Sizes(dtypeSize = caffeLib.get_dtype_size(), intSize = caffeLib.get_int_size())
   import sizes._
-
   var numTestBatches = None: Option[Int]
 
 
@@ -136,16 +138,19 @@ class CaffeNet(state: Pointer, caffeLib: CaffeLibrary) extends Net{
   }
 
   def train(numSteps: Int) = {
-    caffeLib.set_mode_gpu()
+    caffeLib.set_mode_cpu()
     caffeLib.solver_step(state, numSteps)
   }
 
-  def test(): Array[Float] = {
-    caffeLib.set_mode_gpu()
-    print("hey\n")
-    assert(!numTestBatches.isEmpty)
-    caffeLib.solver_test(state, numTestBatches.get) // you must run this before running caffeLib.num_test_scores(state)
+  private def testInit(numMinibatches: Int): Int = {
+    caffeLib.set_mode_cpu()
+    caffeLib.solver_test(state, numMinibatches) // you must run this before running caffeLib.num_test_scores(state)
     val numTestScores = caffeLib.num_test_scores(state)
+    numTestScores
+  }
+
+  override def test(): Array[Float] = {
+    val numTestScores = testInit(numTestBatches.getOrElse{sys.error("No test minibatches")})
     val testScores = new Array[Float](numTestScores)
     for (i <- 0 to numTestScores - 1) {
       testScores(i) = caffeLib.get_test_score(state, i) // for accuracy layers, this returns the average accuracy over a minibatch
@@ -155,17 +160,25 @@ class CaffeNet(state: Pointer, caffeLib: CaffeLibrary) extends Net{
     //return Array(0)
   }
 
-  def forward() = {
-    caffeLib.set_mode_gpu()
+  override def test(index: Int) : Float = {
+    val numTestScores = testInit(1)
+    // First value is the label
+    val offset = index + 1
+    assert(offset < numTestScores, s"index $index is greater than the number of categories $numTestScores")
+    caffeLib.get_test_score(state, offset)
+  }
+
+  override def forward() = {
+    caffeLib.set_mode_cpu()
     caffeLib.forward(state)
   }
 
-  def backward() = {
-    caffeLib.set_mode_gpu()
+  override def backward() = {
+    caffeLib.set_mode_cpu()
     caffeLib.backward(state)
   }
 
-  def setWeights(allWeights: WeightCollection) = {
+  override def setWeights(allWeights: WeightCollection) = {
     assert(allWeights.numLayers == numLayers)
     for (i <- 0 to numLayers - 1) {
       assert(allWeights.allWeights(layerNames(i)).length == layerNumBlobs(i)) // check that we have the correct number of weights
@@ -185,7 +198,7 @@ class CaffeNet(state: Pointer, caffeLib: CaffeLibrary) extends Net{
     }
   }
 
-  def getWeights(): WeightCollection = {
+  override def getWeights(): WeightCollection = {
     val allWeights = Map[String, MutableList[NDArray]]()
     for (i <- 0 to numLayers - 1) {
       val weightList = MutableList[NDArray]()

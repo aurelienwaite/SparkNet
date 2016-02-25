@@ -14,6 +14,8 @@ class WorkerStore() {
     return nets(name)
   }
 
+  def initialized() = caffeLib.isDefined
+
   def setLib(library: CaffeLibrary) = {
     caffeLib = Some(library)
   }
@@ -22,4 +24,5 @@ class WorkerStore() {
     assert(!caffeLib.isEmpty)
     return caffeLib.get
   }
+
 }
