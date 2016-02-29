@@ -82,12 +82,12 @@ object CifarDBApp {
     // initialize Caffe Libraries on workers
     workers.foreach(_ => {
       System.load(sparkNetHome + "/build/libccaffe.so")
-      val caffeLib = CaffeLibrary.INSTANCE
+      val caffeLib = CaffeLibrary.Instance.get()
       caffeLib.set_basepath(sparkNetHome + "/caffe/")
       workerStore.setLib(caffeLib)
     })
     System.load(sparkNetHome + "/build/libccaffe.so")
-    val caffeLib = CaffeLibrary.INSTANCE
+    val caffeLib = CaffeLibrary.Instance.get()
     caffeLib.set_basepath(sparkNetHome + "/caffe/")
 
     val trainDBFilename = sparkNetHome + "/caffe/examples/cifar10/cifar10_train_db"

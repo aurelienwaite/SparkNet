@@ -7,7 +7,7 @@ import caffe.Caffe._
 
 object ProtoLoader {
   def loadSolverPrototxt(filename: String) : SolverParameter = {
-    val caffeLib = CaffeLibrary.INSTANCE
+    val caffeLib = CaffeLibrary.Instance.get()
     val state = caffeLib.create_state()
     caffeLib.parse_solver_prototxt(state, filename)
     var len = caffeLib.get_prototxt_len(state)
@@ -18,7 +18,7 @@ object ProtoLoader {
   }
 
   def loadNetPrototxt(filename: String): NetParameter = {
-    val caffeLib = CaffeLibrary.INSTANCE
+    val caffeLib = CaffeLibrary.Instance.get()
     val state = caffeLib.create_state()
     caffeLib.parse_net_prototxt(state, filename)
     var len = caffeLib.get_prototxt_len(state)

@@ -1,12 +1,32 @@
 package libs;
 
-import com.sun.jna.Callback;
-import com.sun.jna.Pointer;
-import com.sun.jna.Library;
-import com.sun.jna.Native;
+import com.sun.jna.*;
 
 public interface CaffeLibrary extends Library {
-  CaffeLibrary INSTANCE = (CaffeLibrary)Native.loadLibrary("ccaffe", CaffeLibrary.class);
+
+  class Instance{
+
+    private static final String LIB_NAME="ccaffe";
+    static CaffeLibrary l = null;
+
+    public synchronized static CaffeLibrary get(String fileName) {
+      if(l!= null) throw new RuntimeException("Library already loaded!");
+      l = (CaffeLibrary)Native.loadLibrary(fileName, CaffeLibrary.class);
+      return l;
+    }
+
+    public synchronized static CaffeLibrary get() {
+      if(l == null){
+        l = (CaffeLibrary)Native.loadLibrary(LIB_NAME, CaffeLibrary.class);
+      }
+      return l;
+    }
+
+    public synchronized static void dispose() {
+      l = null;
+      NativeLibrary.getInstance(LIB_NAME).dispose();
+    }
+  }
 
   // extend this to create a callback that will fill a data layer
   interface java_callback_t extends Callback {

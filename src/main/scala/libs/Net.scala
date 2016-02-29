@@ -99,7 +99,7 @@ trait Net {
 
 case class Sizes(dtypeSize: Int, intSize: Int)
 
-class CaffeNet(state: Pointer, caffeLib: CaffeLibrary) extends Net{
+class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary) extends Net{
   val numLayers = caffeLib.num_layers(state)
   val layerNames = List.range(0, numLayers).map(i => caffeLib.layer_name(state, i))
   val layerNumBlobs = List.range(0, numLayers).map(i => caffeLib.num_layer_weights(state, i))
@@ -295,7 +295,7 @@ object CaffeNet {
   }
 
   def apply(caffeLib: CaffeLibrary, solverParameter: SolverParameter): CaffeNet = {
-    val caffeLib = CaffeLibrary.INSTANCE
+    val caffeLib = CaffeLibrary.Instance.get()
     val state = caffeLib.create_state()
     val byteArr = solverParameter.toByteArray()
     val ptr = new Memory(byteArr.length)

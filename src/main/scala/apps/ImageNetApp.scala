@@ -92,7 +92,7 @@ object ImageNetApp {
     // initialize nets on workers
     workers.foreach(_ => {
       System.load(sparkNetHome + "/build/libccaffe.so")
-      val caffeLib = CaffeLibrary.INSTANCE
+      val caffeLib = CaffeLibrary.Instance.get()
       var netParameter = ProtoLoader.loadNetPrototxt(sparkNetHome + "/caffe/models/bvlc_reference_caffenet/train_val.prototxt")
       netParameter = ProtoLoader.replaceDataLayers(netParameter, trainBatchSize, testBatchSize, channels, croppedHeight, croppedWidth)
       val solverParameter = ProtoLoader.loadSolverPrototxtWithNet(sparkNetHome + "/caffe/models/bvlc_reference_caffenet/solver.prototxt", netParameter, None)

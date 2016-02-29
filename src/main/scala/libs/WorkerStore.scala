@@ -8,6 +8,7 @@ class WorkerStore() {
 
   def setNet(name: String, net: CaffeNet) = {
     nets += (name -> net)
+    setLib(net.caffeLib)
   }
 
   def getNet(name: String): CaffeNet = {
@@ -17,12 +18,20 @@ class WorkerStore() {
   def initialized() = caffeLib.isDefined
 
   def setLib(library: CaffeLibrary) = {
-    caffeLib = Some(library)
+    caffeLib = Option(library)
   }
 
   def getLib(): CaffeLibrary = {
     assert(!caffeLib.isEmpty)
     return caffeLib.get
+  }
+
+  def reset() = {
+    nets = Map()
+    for(_ <- caffeLib) {
+      CaffeLibrary.Instance.dispose()
+    }
+    caffeLib = None
   }
 
 }

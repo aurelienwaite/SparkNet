@@ -95,12 +95,12 @@ object ImageNetCreateDBApp {
     // initialize Caffe Libraries on workers
     workers.foreach(_ => {
       System.load(sparkNetHome + "/build/libccaffe.so")
-      val caffeLib = CaffeLibrary.INSTANCE
+      val caffeLib = CaffeLibrary.Instance.get()
       caffeLib.set_basepath(sparkNetHome + "/caffe/")
       workerStore.setLib(caffeLib)
     })
     System.load(sparkNetHome + "/build/libccaffe.so")
-    val caffeLib = CaffeLibrary.INSTANCE
+    val caffeLib = CaffeLibrary.Instance.get()
     caffeLib.set_basepath(sparkNetHome + "/caffe/")
 
     log("write train data to DB")

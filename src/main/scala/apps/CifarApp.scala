@@ -81,7 +81,7 @@ object CifarApp {
     // initialize nets on workers
     workers.foreach(_ => {
       System.load(sparkNetHome + "/build/libccaffe.so")
-      val caffeLib = CaffeLibrary.INSTANCE
+      val caffeLib = CaffeLibrary.Instance.get()
       var netParameter = ProtoLoader.loadNetPrototxt(sparkNetHome + "/caffe/examples/cifar10/cifar10_full_train_test.prototxt")
       netParameter = ProtoLoader.replaceDataLayers(netParameter, trainBatchSize, testBatchSize, channels, height, width)
       val solverParameter = ProtoLoader.loadSolverPrototxtWithNet(sparkNetHome + "/caffe/examples/cifar10/cifar10_full_solver.prototxt", netParameter, None)
