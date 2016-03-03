@@ -5,10 +5,10 @@ package libs
   */
 object Perplexity {
 
-  def compute(labels: Seq[Int], net: Net) = {
+  def compute(labels: Seq[Int], net: Net, features: Option[Seq[Array[Float]]] = None) = {
     var i=0
     val logLiklihood =
-      (for (l <- labels) yield {
+      (for (f<-features.toTraversable; (in, l) <- f zip labels) yield {
         val prob = net.test(l)
         i+=1
         Math.log(prob)

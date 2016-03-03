@@ -46,12 +46,12 @@ object NPLMApp {
     }
   }
 
-  def buildSolverProto(epoch: Int, lr: Float, testIter: Int)(netProto: NetParameter)  =
+  def buildSolverProto(epoch: Int, lr: Float, testIter: Int)(netProto: NetParameter)  = {
     SolverParameter.newBuilder
       .setNetParam(netProto)
       .setBaseLr(lr)
       .setLrPolicy("fixed")
-      .setDisplay(epoch/ 100)
+      .setDisplay(epoch / 100)
       .setMaxIter(epoch)
       .setSnapshot(Int.MaxValue)
       .setSnapshotPrefix("/tmp/sparknet")
@@ -59,7 +59,7 @@ object NPLMApp {
       .addTestIter(testIter)
       .setTestInterval(Int.MaxValue) //Need to include a test interval to avoid a segfault in libcaffe
       .build()
-
+  }
 
   implicit val makeNPLMCallbacks = new MakeCallbacks[Array[Float]] {
     override def makeDataCallback(sizes : Sizes, minibatchSampler: MinibatchSampler[Array[Float], _ ],
@@ -119,6 +119,17 @@ object NPLMApp {
     workerStore.setNet("net", net)
   }
 
+  def computePerplexity(testNet: CaffeNet, devSet: Seq[(Array[Float], Int)]) = {
+    val devMinibatches = devSet.grouped(1).map(_.toArray).map(b => (b.map(_._1), b.map(_._2))).toSeq
+    val labels = devSet.map(_._2)
+    logNplm("Computing perplexity")
+    val len = devMinibatches.length
+    val minibatchSampler = new MinibatchSampler(devMinibatches.toIterator, len, len)
+    testNet.setTestData(minibatchSampler, len)
+    val newPerperplexity = Perplexity.compute(labels, testNet, Option(devSet.map(_._1)))
+    logNplm(s"Perplexity: $newPerperplexity")
+    newPerperplexity
+  }
 
   case class Config(
                      numWorkers: Int = -1,
@@ -129,7 +140,8 @@ object NPLMApp {
                      snapshotPrefix: String = "/tmp/",
                      sparkNetHomeOpt: Option[String] = CaffeNet.getSparkNetHome(),
                      startLearningRate: Float = 1.0f,
-                     numEpochs: Int = 50
+                     numEpochs: Int = 50,
+                     samplePercentage: Option[Double] = None
                    )
 
   def main(args: Array[String]) {
@@ -153,6 +165,12 @@ object NPLMApp {
       opt[String]('s', "sparknet_home") valueName ("sparknet home") action { (x, c) =>
         c.copy(sparkNetHomeOpt = Option(x))
       }
+      opt[Int]('y', "sync_interval") valueName("sync interval tau") action { (x, c) =>
+        c.copy(syncInterval = x)
+      }
+      opt[Double]('a', "sample_percentage") valueName("Percentage subset of the training data") action { (x, c) =>
+        c.copy(samplePercentage = Option(x))
+      }
     }
     val cliConf = parser.parse(args, Config()).getOrElse(sys.exit(1))
     import cliConf._
@@ -175,12 +193,13 @@ object NPLMApp {
     // Prepare dev set
     val devSet = sqlContext.read.parquet(devSetFile)
     val asArrays = rowToArrays(devSet.collect())
-    val devMinibatches = asArrays.grouped(1).map(_.toArray).map(b => (b.map(_._1), b.map(_._2))).toSeq
+    //val devMinibatches = asArrays.grouped(1).map(_.toArray).map(b => (b.map(_._1), b.map(_._2))).toSeq
     logNplm(s"Dev set contains ${asArrays.length} records")
-    val labels = asArrays.map(_._2)
+
 
     // Prepare training set
-    val trainSet = sqlContext.read.parquet(trainSetFile)
+    val loadedTrainSet = sqlContext.read.parquet(trainSetFile)
+    val trainSet = samplePercentage.map(loadedTrainSet.sample(false, _, 11l )).getOrElse(loadedTrainSet)
     val getSize = udf((features: linalg.Vector) => features.size)
     val ngramSizes = trainSet.select(getSize(trainSet("features"))).distinct().map(n => n.getAs[Int](0)).collect
     assert(ngramSizes.size == 1, sys.error("NGrams have different history lengths: " + ngramSizes.mkString(",")))
@@ -234,6 +253,7 @@ object NPLMApp {
       def iterate(netWeights: WeightCollection, iterationCounter: Int): WeightCollection = {
         logNplm("broadcasting weights")
         val broadcastWeights = sc.broadcast(netWeights)
+
         logNplm("training")
         val trained = trainPartitionSizes.zipPartitions(minibatched)(
           (lenIt, trainMinibatchIt) => {
@@ -275,18 +295,14 @@ object NPLMApp {
       val snapshotPath = s"$snapshotPrefix/sparknet_epoch_${numEpochs - epochCounter}"
       logNplm(s"saving weights to $snapshotPath")
       testNet.saveWeightsToFile(snapshotPath)
-      logNplm("Computing perplexity")
-      val len = asArrays.length
-      val minibatchSampler = new MinibatchSampler(devMinibatches.toIterator, len, len)
-      testNet.setTestData(minibatchSampler, len)
-      val newPerperplexity = Perplexity.compute(labels, testNet)
-      logNplm(s"Perplexity: $newPerperplexity")
-      val (updatedLr, updatedWeights, updatedPerplexity) = if(newPerperplexity > perplexity){
+      val newPerplexity = computePerplexity(testNet, asArrays)
+
+      val (updatedLr, updatedWeights, updatedPerplexity) = if(newPerplexity > perplexity){
         logNplm("Halving learning rate")
-        (learningRate/2f, optimisedWeights, perplexity)
+        (learningRate/2f, optimisedWeights, newPerplexity)
       }
       else
-        (learningRate, optimisedWeights, newPerperplexity)
+        (learningRate, optimisedWeights, newPerplexity)
       if(epochCounter == 1)
         return updatedWeights
       else
