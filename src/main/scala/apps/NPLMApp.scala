@@ -26,6 +26,11 @@ object NPLMApp {
   val testBatchSize = 1
   val channels = 1
   val height = 1
+  // After model parameters are computed, we need to redestribute and add them together so as not
+  // to overwhelm the driver. This number tells the driver how many submodels to use
+  val coalescedModels = 10
+  // compute perplexity after set number of intervals
+  val perplexityInterval = 10
 
   val workerStore = new WorkerStore()
 
@@ -168,8 +173,11 @@ object NPLMApp {
       opt[Int]('y', "sync_interval") valueName("sync interval tau") action { (x, c) =>
         c.copy(syncInterval = x)
       }
-      opt[Double]('a', "sample_percentage") valueName("Percentage subset of the training data") action { (x, c) =>
+      opt[Double]('a', "sample_percentage") valueName("percentage subset of the training data") action { (x, c) =>
         c.copy(samplePercentage = Option(x))
+      }
+      opt[Double]('l', "learning_rate") valueName("initial learning rate") action { (x, c) =>
+        c.copy(startLearningRate = x.toFloat)
       }
     }
     val cliConf = parser.parse(args, Config()).getOrElse(sys.exit(1))
@@ -177,7 +185,10 @@ object NPLMApp {
 
     val conf = new SparkConf()
       .setAppName("CaffeNPLM")
-      .set("spark.driver.maxResultSize", "5G")
+      .set("spark.driver.maxResultSize", "15G")
+      .set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+      .set("spark.kryoserializer.buffer.max", "512m")
+      .registerKryoClasses(Array(classOf[WeightCollection]))
     val sc = new SparkContext(conf)
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
 
@@ -206,7 +217,7 @@ object NPLMApp {
     val ngramSize= ngramSizes(0)
     logNplm(s"Using ngrams of order ${ngramSize + 1}")
     val coalesced = trainSet.repartition(numWorkers)
-    coalesced.show()
+    //coalesced.show()
 
     //Initialise the driver caffelib for testing perplexities
     val solverBuilder = buildSolverProto(0, 0, asArrays.size) _
@@ -222,8 +233,8 @@ object NPLMApp {
       logNplm(s"Sorting data with salt $salt")
       val getSaltedHash = udf((features: linalg.Vector, label: Int) => Vector((Seq(salt, label) ++ features.toArray.map(_.toInt)) :_* ).hashCode())
       val resorted = coalesced.orderBy(getSaltedHash(trainSet("features"), trainSet("label"))).repartition(numWorkers)
-      logNplm(s"Reordered data contains ${resorted.count()} rows")
-      resorted.show
+      //logNplm(s"Reordered data contains ${resorted.count()} rows")
+      //resorted.show
 
       logNplm(f"Begin epoch with learning rate $learningRate%.4f and perplexity $perplexity%.4f")
       logNplm("Creating minibatches")
@@ -237,8 +248,8 @@ object NPLMApp {
         batched.map(b => (b.map(_._1), b.map(_._2)))
       }.cache()
 
-      val numTrainMinibatches = minibatched.count()
-      logNplm(s"Number of minibatches = $numTrainMinibatches")
+      //val numTrainMinibatches = minibatched.count()
+      //logNplm(s"Number of minibatches = $numTrainMinibatches")
 
       // Partition sizes also includes worker ID
       val trainPartitionSizes = minibatched.mapPartitionsWithIndex((w, iter) => Iterator((w, iter.size))).cache()
@@ -251,9 +262,15 @@ object NPLMApp {
 
       @tailrec
       def iterate(netWeights: WeightCollection, iterationCounter: Int): WeightCollection = {
+        val i = numIterations - iterationCounter
+        if(i % perplexityInterval == 0 ) {
+          val testNet = workerStore.getNet("net")
+          testNet.setWeights(netWeights)
+          val perplexity = computePerplexity(testNet, asArrays)
+          logNplm(s"For iteration $i perplexity: $perplexity")
+        }
         logNplm("broadcasting weights")
         val broadcastWeights = sc.broadcast(netWeights)
-
         logNplm("training")
         val trained = trainPartitionSizes.zipPartitions(minibatched)(
           (lenIt, trainMinibatchIt) => {
@@ -277,7 +294,7 @@ object NPLMApp {
           }
         )
         logNplm("collecting weights")
-        val (updatedWeights, elapsed) = trained.reduce{
+        val (updatedWeights, elapsed) = trained.repartition(coalescedModels).reduce{
           case ((aWeights, aElapsed), (bWeights, bElapsed)) => (WeightCollection.add(aWeights, bWeights), Math.max(aElapsed, bElapsed))
         }
         logNplm(s"caffe library completed in $elapsed seconds")
