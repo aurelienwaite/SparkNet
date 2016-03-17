@@ -2,16 +2,53 @@ import AssemblyKeys._
 
 assemblySettings
 
-// to regenerate the Java protobuf files, run:
-// protoc -I=$SPARKNET_HOME/caffe/src/caffe/proto/ --java_out=$SPARKNET_HOME/src/main/scala/protobuf/' $SPARKNET_HOME/caffe/src/caffe/proto/caffe.proto
+classpathTypes += "maven-plugin"
+
+// resolvers += "Local Maven Repository" at "file://"+Path.userHome.absolutePath+"/.m2/repository"
+
+resolvers += "javacpp" at "http://www.eecs.berkeley.edu/~rkn/snapshot-2016-03-05/"
+
+libraryDependencies += "org.bytedeco" % "javacpp" % "1.2-SPARKNET"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.2-SPARKNET"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.2-SPARKNET" classifier "linux-x86_64"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.1.0-1.2-SPARKNET"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.1.0-1.2-SPARKNET" classifier "linux-x86_64"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "tensorflow" % "master-1.2-SPARKNET"
+
+libraryDependencies += "org.bytedeco.javacpp-presets" % "tensorflow" % "master-1.2-SPARKNET" classifier "linux-x86_64"
+
+// libraryDependencies += "org.bytedeco" % "javacpp" % "1.1"
+
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "linux-x86"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "linux-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "macosx-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "windows-x86"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "caffe" % "master-1.1" classifier "windows-x86_64"
+
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "linux-x86"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "linux-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "macosx-x86_64"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "windows-x86"
+// libraryDependencies += "org.bytedeco.javacpp-presets" % "opencv" % "3.0.0-1.1" classifier "windows-x86_64"
 
 libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.5.0"
 
-libraryDependencies += "org.apache.spark" %% "spark-mllib" % "1.6.0" % "provided"
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.6.1" % "provided"
+
+libraryDependencies += "org.apache.spark" %% "spark-mllib" % "1.6.1" % "provided"
+
+libraryDependencies += "com.databricks" %% "spark-csv" % "1.3.0"
 
 libraryDependencies += "net.java.dev.jna" % "jna" % "4.2.1"
 
-libraryDependencies += "org.scalatest" % "scalatest_2.10" % "2.0" % "test"
+libraryDependencies += "org.scalatest" %% "scalatest" % "2.0" % "test"
 
 libraryDependencies += "com.amazonaws" % "aws-java-sdk" % "1.10.21"
 
@@ -31,4 +68,7 @@ dependencyOverrides ++= Set(
  "com.fasterxml.jackson.core" % "jackson-databind" % "2.4.4"
 )
 
-test in assembly := {}
+// test in assembly := {}
+
+parallelExecution in test := false
+// fork in test := true

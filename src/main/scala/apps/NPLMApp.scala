@@ -1,20 +1,16 @@
 package apps
 
 import java.io._
-import java.net.URLDecoder
-import java.util
 
-import caffe.Caffe._
-import caffe.Caffe.SolverParameter.SolverMode.CPU
 
 import com.google.protobuf.TextFormat
 
-import com.sun.jna.Pointer
 import libs._
 import org.apache.log4j.{Logger, Level}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.mllib.linalg
 import org.apache.spark.sql.Row
+import org.bytedeco.javacpp.caffe._
 
 
 import scala.annotation.tailrec
@@ -32,14 +28,6 @@ object NPLMApp {
   // compute perplexity after set number of intervals
   val perplexityInterval = 10
 
-  val workerStore = new WorkerStore()
-
-  def time(f: => Unit)={
-    val s = System.currentTimeMillis
-    f
-    (System.currentTimeMillis - s) / 1000
-  }
-
 
   def rowToArrays(in: Seq[Row]) = {
     val toVecs = in.map { r =>
@@ -51,22 +39,32 @@ object NPLMApp {
     }
   }
 
-  def buildSolverProto(epoch: Int, lr: Float, testIter: Int)(netProto: NetParameter)  = {
-    SolverParameter.newBuilder
-      .setNetParam(netProto)
-      .setBaseLr(lr)
-      .setLrPolicy("fixed")
-      .setDisplay(epoch / 100)
-      .setMaxIter(epoch)
-      .setSnapshot(Int.MaxValue)
-      .setSnapshotPrefix("/tmp/sparknet")
-      .setSolverMode(CPU)
-      .addTestIter(testIter)
-      .setTestInterval(Int.MaxValue) //Need to include a test interval to avoid a segfault in libcaffe
-      .build()
+  def minibatchToBlobs(in: Seq[(Array[Float], Int)], minibatchSize: Int) = {
+    val grouped = in.grouped(minibatchSize)
+    val batched = grouped.filter(_.size == minibatchSize).map(_.toArray)
+    for (b <- batched ) yield {
+      val data = b.map(_._1).flatten.toArray
+      val label = b.map(_._2.toFloat).toArray
+      Array(data, label)
+    }
   }
 
-  implicit val makeNPLMCallbacks = new MakeCallbacks[Array[Float]] {
+  def buildSolverProto(epoch: Int, lr: Float, testIter: Int)(net: NetParameter) = {
+    val solverParam = new SolverParameter()
+    solverParam.set_allocated_net_param(net)
+    solverParam.set_base_lr(lr)
+    solverParam.set_lr_policy("fixed")
+    solverParam.set_display(epoch/100)
+    solverParam.set_max_iter(epoch)
+    solverParam.set_snapshot(Int.MaxValue)
+    solverParam.set_snapshot_prefix("/tmp/sparknet")
+    solverParam.set_solver_mode(Caffe.CPU)
+    solverParam.add_test_iter(testIter)
+    solverParam.set_test_interval(Int.MaxValue)
+    solverParam
+  }
+
+  /*implicit val makeNPLMCallbacks = new MakeCallbacks[Array[Float]] {
     override def makeDataCallback(sizes : Sizes, minibatchSampler: MinibatchSampler[Array[Float], _ ],
                                   preprocessing: Option[(Array[Float], Array[Float]) => Unit] = None): CaffeLibrary.java_callback_t = {
       return new CaffeLibrary.java_callback_t() {
@@ -95,7 +93,7 @@ object NPLMApp {
       }
     }
 
-  }
+  }*/
 
   val nplmLevel = new Level(3500, "CaffeNPLM", 4){}
   val logger = Logger.getLogger(this.getClass)
@@ -103,35 +101,33 @@ object NPLMApp {
   def logNplm(toLog: String): Unit = logger.log(nplmLevel, toLog)
 
   def initialiseCaffeLibrary(
-                            sparkNetHome: String,
                             netPrototext: File,
-                            ngramSize: Int,
                             solverBuilder: NetParameter => SolverParameter
                             ) = {
-    logNplm(sys.props.get("jna.library.path").getOrElse("jna.library.path not set"))
-    val caffeLib = CaffeLibrary.Instance.get(sparkNetHome + "/build/libccaffe.so")
+    //logNplm(sys.props.get("jna.library.path").getOrElse("jna.library.path not set"))
+    //val caffeLib = CaffeLibrary.Instance.get(sparkNetHome + "/build/libccaffe.so")
     //val caffeLib = CaffeLibrary.Instance.get()
-    logNplm("Caffe library loaded")
-    var netParameter = ProtoLoader.loadNetPrototxt(netPrototext.getAbsolutePath)
-    logNplm(s"Proto loaded from ${netPrototext.getAbsolutePath}")
-    netParameter = ProtoLoader.replaceDataLayers(netParameter, trainBatchSize, testBatchSize, channels, height, ngramSize)
-    logNplm("Data layers replaced")
+    //logNplm("Caffe library loaded")
+    val netParameter = new NetParameter()
+    ReadProtoFromTextFileOrDie(netPrototext.getAbsolutePath, netParameter)
     val solverParameter = solverBuilder(netParameter)
     logNplm("Built solver")
-    logNplm(TextFormat.printToString(solverParameter))
-    val net = CaffeNet(caffeLib, solverParameter)
+    //logNplm(TextFormat.printToString(solverParameter))
     logNplm("Caffe network loaded")
-    workerStore.setNet("net", net)
+    solverParameter
   }
 
-  def computePerplexity(testNet: CaffeNet, devSet: Seq[(Array[Float], Int)]) = {
-    val devMinibatches = devSet.grouped(1).map(_.toArray).map(b => (b.map(_._1), b.map(_._2))).toSeq
-    val labels = devSet.map(_._2)
+
+  def computePerplexity(testNet: CaffeNet, devSet: Iterator[Array[Array[Float]]]) = {
     logNplm("Computing perplexity")
-    val len = devMinibatches.length
-    val minibatchSampler = new MinibatchSampler(devMinibatches.toIterator, len, len)
-    testNet.setTestData(minibatchSampler, len)
-    val newPerperplexity = Perplexity.compute(labels, testNet, Option(devSet.map(_._1)))
+    val lossesIter = for(minibatch <- devSet) yield {
+      testNet.setMinibatch(minibatch)
+      val forwardOut = testNet.forward(List("loss")).getOrElse("loss", sys.error("Unable to retrive loss from the network")).toFlat()
+      assert(forwardOut.length == 0, sys.error(s"Loss dimension is ${forwardOut.length}"))
+      forwardOut(0)
+    }
+    val losses = lossesIter.toSeq
+    val newPerperplexity = losses.reduce(_ +_ ) / losses.size
     logNplm(s"Perplexity: $newPerperplexity")
     newPerperplexity
   }
@@ -143,7 +139,6 @@ object NPLMApp {
                      netPrototext: File = new File("."),
                      syncInterval: Int = 50,
                      snapshotPrefix: String = "/tmp/",
-                     sparkNetHomeOpt: Option[String] = CaffeNet.getSparkNetHome(),
                      startLearningRate: Float = 1.0f,
                      numEpochs: Int = 50,
                      samplePercentage: Option[Double] = None
@@ -167,9 +162,9 @@ object NPLMApp {
       opt[String]('p', "snapshot_prefix") valueName ("snapshot prefix") action { (x, c) =>
         c.copy(snapshotPrefix = x)
       }
-      opt[String]('s', "sparknet_home") valueName ("sparknet home") action { (x, c) =>
-        c.copy(sparkNetHomeOpt = Option(x))
-      }
+      //opt[String]('s', "sparknet_home") valueName ("sparknet home") action { (x, c) =>
+      //  c.copy(sparkNetHomeOpt = Option(x))
+      //}
       opt[Int]('y', "sync_interval") valueName("sync interval tau") action { (x, c) =>
         c.copy(syncInterval = x)
       }
@@ -192,21 +187,21 @@ object NPLMApp {
     val sc = new SparkContext(conf)
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
 
-    val sparkNetHome = sparkNetHomeOpt getOrElse {
+    /*val sparkNetHome = sparkNetHomeOpt getOrElse {
       val msg = "Cannot set SparkNet home"
       logger.log(Level.ERROR, msg)
       sys.error(msg)
     }
-    logNplm(s"SparkNet home = $sparkNetHome")
+    logNplm(s"SparkNet home = $sparkNetHome")*/
 
     import org.apache.spark.sql.functions._
 
     // Prepare dev set
     val devSet = sqlContext.read.parquet(devSetFile)
     val asArrays = rowToArrays(devSet.collect())
+    val devSetMinibatches = minibatchToBlobs(asArrays, testBatchSize)
     //val devMinibatches = asArrays.grouped(1).map(_.toArray).map(b => (b.map(_._1), b.map(_._2))).toSeq
     logNplm(s"Dev set contains ${asArrays.length} records")
-
 
     // Prepare training set
     val loadedTrainSet = sqlContext.read.parquet(trainSetFile)
@@ -221,7 +216,15 @@ object NPLMApp {
 
     //Initialise the driver caffelib for testing perplexities
     val solverBuilder = buildSolverProto(0, 0, asArrays.size) _
-    initialiseCaffeLibrary(sparkNetHome, netPrototext, ngramSize, solverBuilder)
+    @transient lazy val solverParam = initialiseCaffeLibrary(netPrototext, solverBuilder)
+
+    trait Updatable{
+      def update()
+    }
+    @transient lazy val solver = new FloatSGDSolver(solverParam) with Updatable{
+      override def update() = super.ApplyUpdate()
+    }
+    @transient lazy val net = CaffeNet(solverParam.net_param)
 
     @tailrec
     def iterateEpoch(epochWeights: WeightCollection, epochCounter: Int, learningRate: Float, perplexity: Double): WeightCollection = {
@@ -229,34 +232,31 @@ object NPLMApp {
        Spark does not sort order of RDDs. To create an ordering, we use a salted hash function. The salt varies by epoch
        which results for a different order by epoch
        */
-      val salt = Random.nextInt()
-      logNplm(s"Sorting data with salt $salt")
-      val getSaltedHash = udf((features: linalg.Vector, label: Int) => Vector((Seq(salt, label) ++ features.toArray.map(_.toInt)) :_* ).hashCode())
-      val resorted = coalesced.orderBy(getSaltedHash(trainSet("features"), trainSet("label"))).repartition(numWorkers)
+      //val salt = Random.nextInt()
+      //logNplm(s"Sorting data with salt $salt")
+      //val getSaltedHash = udf((features: linalg.Vector, label: Int) => Vector((Seq(salt, label) ++ features.toArray.map(_.toInt)) :_* ).hashCode())
+      //val resorted = coalesced.orderBy(getSaltedHash(trainSet("features"), trainSet("label"))).repartition(numWorkers)
       //logNplm(s"Reordered data contains ${resorted.count()} rows")
       //resorted.show
 
       logNplm(f"Begin epoch with learning rate $learningRate%.4f and perplexity $perplexity%.4f")
       logNplm("Creating minibatches")
-      val minibatched = resorted.mapPartitions { iter =>
-        workerStore.reset() // Clean up memory of workers before starting epoch
+      val minibatched = coalesced.mapPartitions { iter =>
         val shuffled = Random.shuffle(iter.toVector)
-        //Convert vectors to array representation, for fast array copy in the call backs
         val arrays = rowToArrays(shuffled)
-        val grouped = arrays.grouped(trainBatchSize)
-        val batched = grouped.filter(_.size == trainBatchSize).map(_.toArray)
-        batched.map(b => (b.map(_._1), b.map(_._2)))
+        minibatchToBlobs(arrays, trainBatchSize)
       }.cache()
+
 
       //val numTrainMinibatches = minibatched.count()
       //logNplm(s"Number of minibatches = $numTrainMinibatches")
 
       // Partition sizes also includes worker ID
-      val trainPartitionSizes = minibatched.mapPartitionsWithIndex((w, iter) => Iterator((w, iter.size))).cache()
+      val trainPartitionSizes = minibatched.mapPartitions(i => Iterator(i.size)).cache()
       val trainPartitionSizesCollected = trainPartitionSizes.collect()
-      val trainPartitionSizesString = trainPartitionSizesCollected.map(p => s"Partition ${p._1} has ${p._2} minibatches").mkString("\n")
-      logNplm(trainPartitionSizesString)
-      val epoch = trainPartitionSizesCollected.map(_._2).min
+      for ((size, i) <- trainPartitionSizesCollected.zipWithIndex)
+        logNplm( s"Partition $i has $size minibatches")
+      val epoch = trainPartitionSizesCollected.min
       val solverBuilder = buildSolverProto(epoch, learningRate, asArrays.size) _
       val numIterations = epoch / syncInterval
 
@@ -264,35 +264,28 @@ object NPLMApp {
       def iterate(netWeights: WeightCollection, iterationCounter: Int): WeightCollection = {
         val i = numIterations - iterationCounter
         if(i % perplexityInterval == 0 ) {
-          val testNet = workerStore.getNet("net")
-          testNet.setWeights(netWeights)
-          val perplexity = computePerplexity(testNet, asArrays)
-          logNplm(s"For iteration $i perplexity: $perplexity")
+          net.setWeights(netWeights)
+          val perplexity = computePerplexity(net, devSetMinibatches)
+          logNplm(s"perplexity for iteration $i: $perplexity")
         }
         logNplm("broadcasting weights")
         val broadcastWeights = sc.broadcast(netWeights)
         logNplm("training")
-        val trained = trainPartitionSizes.zipPartitions(minibatched)(
-          (lenIt, trainMinibatchIt) => {
-            assert(lenIt.hasNext && trainMinibatchIt.hasNext)
-            val (w, len) = lenIt.next
-            if(! workerStore.initialized) {
-              logNplm("initialising library")
-              initialiseCaffeLibrary(sparkNetHome, netPrototext, ngramSize, solverBuilder)
+        val trained = minibatched.mapPartitions { iter =>
+          logNplm("setting weights on worker")
+          net.setWeights(broadcastWeights.value)
+          iter.drop(syncInterval * i )
+          logNplm("running minibatches")
+          val elapsed = time {
+            for (_ <- 0 until syncInterval) {
+              val minibatch = iter.next()
+              net.setMinibatch(minibatch)
+              net.forwardBackward()
+              solver.update()
             }
-            logNplm("setting weights on worker")
-            workerStore.getNet("net").setWeights(broadcastWeights.value)
-            assert(!lenIt.hasNext)
-            logNplm("running minibatches")
-            val elapsed = time {
-              val minibatchSampler = new MinibatchSampler[Array[Float], Int](trainMinibatchIt, len, syncInterval,
-                Option(numIterations - iterationCounter))
-              workerStore.getNet("net").setTrainData(minibatchSampler, None)
-              workerStore.getNet("net").train(syncInterval)
-            }
-            Iterator((workerStore.getNet("net").getWeights(), elapsed))
           }
-        )
+          Iterator((net.getWeights(), elapsed))
+        }
         logNplm("collecting weights")
         val (updatedWeights, elapsed) = trained.repartition(coalescedModels).reduce{
           case ((aWeights, aElapsed), (bWeights, bElapsed)) => (WeightCollection.add(aWeights, bWeights), Math.max(aElapsed, bElapsed))
@@ -307,12 +300,11 @@ object NPLMApp {
       val optimisedWeights = iterate(epochWeights, numIterations)
       trainPartitionSizes.unpersist()
       minibatched.unpersist()
-      val testNet = workerStore.getNet("net")
-      testNet.setWeights(optimisedWeights)
+      net.setWeights(optimisedWeights)
       val snapshotPath = s"$snapshotPrefix/sparknet_epoch_${numEpochs - epochCounter}"
       logNplm(s"saving weights to $snapshotPath")
-      testNet.saveWeightsToFile(snapshotPath)
-      val newPerplexity = computePerplexity(testNet, asArrays)
+      net.saveWeightsToFile(snapshotPath)
+      val newPerplexity = computePerplexity(net, devSetMinibatches)
 
       val (updatedLr, updatedWeights, updatedPerplexity) = if(newPerplexity > perplexity){
         logNplm("Halving learning rate")
@@ -325,8 +317,8 @@ object NPLMApp {
       else
         iterateEpoch(updatedWeights, epochCounter -1, updatedLr, updatedPerplexity)
     }
-    val startWeights = workerStore.getNet("net").getWeights()
-    val weights = iterateEpoch(startWeights, numEpochs, startLearningRate, Double.PositiveInfinity)
+    val startWeights = net.getWeights()
+    iterateEpoch(startWeights, numEpochs, startLearningRate, Double.PositiveInfinity)
     logNplm("finished training")
 
   }

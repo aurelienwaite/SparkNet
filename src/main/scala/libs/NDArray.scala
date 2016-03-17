@@ -5,15 +5,15 @@ class NDArray private(val javaArray: JavaNDArray) extends java.io.Serializable {
   val shape = javaArray.shape
 
   def subarray(lowerOffsets: Array[Int], upperOffsets: Array[Int]): NDArray = {
-    return new NDArray(javaArray.subArray(lowerOffsets, upperOffsets))
+    new NDArray(javaArray.subArray(lowerOffsets, upperOffsets))
   }
 
   def slice(axis: Int, index: Int): NDArray = {
-    return new NDArray(javaArray.slice(axis, index))
+    new NDArray(javaArray.slice(axis, index))
   }
 
   def get(indices: Array[Int]): Float = {
-    return javaArray.get(indices:_*)
+    javaArray.get(indices:_*)
   }
 
   def set(indices: Array[Int], value: Float) = {
@@ -24,12 +24,16 @@ class NDArray private(val javaArray: JavaNDArray) extends java.io.Serializable {
     javaArray.flatCopy(result)
   }
 
+  def flatCopySlow(result: Array[Float]) = {
+    javaArray.flatCopySlow(result)
+  }
+
   def toFlat(): Array[Float] = {
-    return javaArray.toFlat()
+    javaArray.toFlat()
   }
 
   def getBuffer(): Array[Float] = {
-    return javaArray.getBuffer()
+    javaArray.getBuffer()
   }
 
   def add(that: NDArray) = {
@@ -47,6 +51,9 @@ class NDArray private(val javaArray: JavaNDArray) extends java.io.Serializable {
 
 object NDArray {
   def apply(data: Array[Float], shape: Array[Int]) = {
+    if (data.length != shape.product) {
+      throw new IllegalArgumentException("The data and shape arguments are not compatible, data.length = " + data.length.toString + " and shape = " + shape.deep + ".\n")
+    }
     new NDArray(new JavaNDArray(data, shape:_*))
   }
 
@@ -55,6 +62,10 @@ object NDArray {
   def plus(v1: NDArray, v2: NDArray): NDArray = {
     val v = new NDArray(new JavaNDArray(v1.toFlat(), v1.shape:_*))
     v.add(v2)
-    return v
+    v
+  }
+
+  def checkEqual(v1: NDArray, v2: NDArray, tol: Float): Boolean = {
+    return v1.javaArray.equals(v2.javaArray, tol)
   }
 }

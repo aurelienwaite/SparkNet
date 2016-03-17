@@ -10,7 +10,7 @@ public class JavaNDArray implements java.io.Serializable {
   private final int[] strides;
 
   public JavaNDArray(float[] data, int dim, int[] shape, int offset, int[] strides) {
-    assert(data.length == JavaNDUtils.arrayProduct(shape));
+    // TODO(rkn): check that all of the arguments are consistent with each other
     assert(shape.length == strides.length);
     this.data = data;
     this.dim = dim;
@@ -56,7 +56,41 @@ public class JavaNDArray implements java.io.Serializable {
     return data[ix];
   }
 
+  private int flatIndex = 0;
+
+  private void baseFlatInto(int offset, float[] result) {
+    if (strides[dim - 1] == 1) {
+      System.arraycopy(data, offset, result, flatIndex, shape[dim - 1]);
+      flatIndex += shape[dim - 1];
+    } else {
+      for (int i = 0; i < shape[dim - 1]; i += 1) {
+        result[flatIndex] = data[offset + i * strides[dim - 1]];
+        flatIndex += 1;
+      }
+    }
+  }
+
+  private void recursiveFlatInto(int currDim, int offset, float[] result) {
+    if (currDim == dim - 1) {
+      baseFlatInto(offset, result);
+    } else {
+      for (int i = 0; i < shape[currDim]; i += 1) {
+        recursiveFlatInto(currDim + 1, offset + i * strides[currDim], result);
+      }
+    }
+  }
+
   public void flatCopy(float[] result) {
+    assert(result.length == JavaNDUtils.arrayProduct(shape));
+    if (dim == 0) {
+      result[0] = data[offset];
+    } else {
+      flatIndex = 0;
+      recursiveFlatInto(0, offset, result);
+    }
+  }
+
+  public void flatCopySlow(float[] result) {
     assert(result.length == JavaNDUtils.arrayProduct(shape));
     int[] indices = new int[dim];
     int index = 0;
@@ -123,5 +157,24 @@ public class JavaNDArray implements java.io.Serializable {
       axis -= 1;
     }
     indices[axis] += 1;
+  }
+
+  public boolean equals(JavaNDArray that, float tol) {
+    if (!JavaNDUtils.shapesEqual(shape, that.shape)) {
+      return false;
+    }
+    int[] indices = new int[dim];
+    int index = 0;
+    // the whole method can be optimized when we have the default strides
+    for (int i = 0; i <= JavaNDUtils.arrayProduct(shape) - 2; i++) {
+      if (Math.abs(get(indices) - that.get(indices)) > tol) {
+        return false;
+      }
+      next(indices);
+    }
+    if (Math.abs(get(indices) - that.get(indices)) > tol) {
+      return false;
+    }
+    return true;
   }
 }

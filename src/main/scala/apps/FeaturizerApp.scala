@@ -5,104 +5,98 @@ import java.io._
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkConf
 
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{DataFrame, Row}
+import org.bytedeco.javacpp.caffe._
+
+import scala.collection.mutable.Map
+
 import libs._
-import CaffeNet._
 import loaders._
 import preprocessing._
 
-// for this app to work, $SPARKNET_HOME should be the SparkNet root directory
-// and you need to run $SPARKNET_HOME/caffe/data/cifar10/get_cifar10.sh
+// For this app to work, $SPARKNET_HOME should be the SparkNet root directory
+// and you need to run $SPARKNET_HOME/data/cifar10/get_cifar10.sh. This app
+// shows how to use an already trained network to featurize some images.
 object FeaturizerApp {
-  val trainBatchSize = 100
-  val testBatchSize = 100
-  val channels = 3
-  val width = 32
-  val height = 32
-  val imShape = Array(channels, height, width)
-  val size = imShape.product
+  val batchSize = 100
 
   val workerStore = new WorkerStore()
 
   def main(args: Array[String]) {
-    val numWorkers = args(0).toInt
     val conf = new SparkConf()
       .setAppName("Featurizer")
       .set("spark.driver.maxResultSize", "5G")
       .set("spark.task.maxFailures", "1")
-    val sc = new SparkContext(conf)
-
-    val sparkNetHome = sys.env("SPARKNET_HOME")
-
-    // information for logging
-    val startTime = System.currentTimeMillis()
-    val trainingLog = new PrintWriter(new File(sparkNetHome + "/training_log_" + startTime.toString + ".txt" ))
-    def log(message: String, i: Int = -1) {
-      val elapsedTime = 1F * (System.currentTimeMillis() - startTime) / 1000
-      if (i == -1) {
-        trainingLog.write(elapsedTime.toString + ": "  + message + "\n")
+    // Fetch generic options: they must precede program specific options
+    var startIx = 0
+    for (arg <- args if arg.startsWith("--")) {
+      if (arg.startsWith("--master=")) {
+        conf.setMaster(args(0).substring("--master=".length))
+        startIx += 1
       } else {
-        trainingLog.write(elapsedTime.toString + ", i = " + i.toString + ": "+ message + "\n")
+        System.err.println(s"Unknown generic option [$arg]")
       }
-      trainingLog.flush()
     }
+    val numWorkers = args(startIx).toInt
 
-    val loader = new CifarLoader(sparkNetHome + "/caffe/data/cifar10/")
-    log("loading train data")
+    val sc = new SparkContext(conf)
+    val sqlContext = new org.apache.spark.sql.SQLContext(sc)
+    val sparkNetHome = sys.env("SPARKNET_HOME")
+    val logger = new Logger(sparkNetHome + "/training_log_" + System.currentTimeMillis().toString + ".txt")
+
+    val loader = new CifarLoader(sparkNetHome + "/data/cifar10/")
+    logger.log("loading data")
     var trainRDD = sc.parallelize(loader.trainImages.zip(loader.trainLabels))
 
-    log("repartition data")
-    trainRDD = trainRDD.repartition(numWorkers)
+    // convert to dataframes
+    val schema = StructType(StructField("data", ArrayType(FloatType), false) :: StructField("label", IntegerType, false) :: Nil)
+    var trainDF = sqlContext.createDataFrame(trainRDD.map{ case (a, b) => Row(a, b)}, schema)
 
-    log("processing train data")
-    val trainConverter = new ScaleAndConvert(trainBatchSize, height, width)
-    var trainMinibatchRDD = trainConverter.makeMinibatchRDDWithoutCompression(trainRDD).persist()
-    val numTrainMinibatches = trainMinibatchRDD.count()
-    log("numTrainMinibatches = " + numTrainMinibatches.toString)
-
-    val numTrainData = numTrainMinibatches * trainBatchSize
-
-    val trainPartitionSizes = trainMinibatchRDD.mapPartitions(iter => Array(iter.size).iterator).persist()
-    log("trainPartitionSizes = " + trainPartitionSizes.collect().deep.toString)
+    logger.log("repartition data")
+    trainDF = trainDF.repartition(numWorkers).cache()
 
     val workers = sc.parallelize(Array.range(0, numWorkers), numWorkers)
 
+    trainDF.foreachPartition(iter => workerStore.put("trainPartitionSize", iter.size))
+
     // initialize nets on workers
     workers.foreach(_ => {
-      System.load(sparkNetHome + "/build/libccaffe.so")
-      val caffeLib = CaffeLibrary.Instance.get()
-      var netParameter = ProtoLoader.loadNetPrototxt(sparkNetHome + "/caffe/examples/cifar10/cifar10_full_train_test.prototxt")
-      netParameter = ProtoLoader.replaceDataLayers(netParameter, trainBatchSize, testBatchSize, channels, height, width)
-      val solverParameter = ProtoLoader.loadSolverPrototxtWithNet(sparkNetHome + "/caffe/examples/cifar10/cifar10_full_solver.prototxt", netParameter, None)
-      val net = CaffeNet(caffeLib, solverParameter)
-      workerStore.setNet("net", net)
+      val netParam = new NetParameter()
+      ReadProtoFromTextFileOrDie(sparkNetHome + "/models/cifar10/cifar10_quick_train_test.prototxt", netParam)
+      val net = CaffeNet(netParam, schema, new DefaultPreprocessor(schema))
+
+      // Caffe.set_mode(Caffe.GPU)
+      workerStore.put("netParam", netParam) // prevent netParam from being garbage collected
+      workerStore.put("net", net) // prevent net from being garbage collected
     })
 
     // initialize weights on master
-    var netWeights = workers.map(_ => workerStore.getNet("net").getWeights()).collect()(0)
-
-    log("broadcasting weights")
+    var netWeights = workers.map(_ => workerStore.get[CaffeNet]("net").getWeights()).collect()(0) // alternatively, load weights from a .caffemodel file
+    logger.log("broadcasting weights")
     val broadcastWeights = sc.broadcast(netWeights)
-    log("setting weights on workers")
-    workers.foreach(_ => workerStore.getNet("net").setWeights(broadcastWeights.value))
+    logger.log("setting weights on workers")
+    workers.foreach(_ => workerStore.get[CaffeNet]("net").setWeights(broadcastWeights.value))
 
-    log("extracting features")
-    val featureBatchRDD = trainPartitionSizes.zipPartitions(trainMinibatchRDD) (
-      (lenIt, trainMinibatchIt) => {
-        assert(lenIt.hasNext && trainMinibatchIt.hasNext)
-        val len = lenIt.next
-        assert(!lenIt.hasNext)
-        val minibatchSampler = new MinibatchSampler(trainMinibatchIt, len, len)
-        workerStore.getNet("net").setTrainData(minibatchSampler, None)
-        val featureBatch = new Array[NDArray](len)
-        for (i <- 0 to len - 1) {
-          workerStore.getNet("net").forward()
-          featureBatch(i) = workerStore.getNet("net").getData()("ip1")
+    // featurize the images
+    val featurizedDF = trainDF.mapPartitions( it => {
+      val trainPartitionSize = workerStore.get[Int]("trainPartitionSize")
+      val numTrainBatches = trainPartitionSize / batchSize
+      val featurizedData = new Array[Array[Float]](trainPartitionSize)
+      val input = new Array[Row](batchSize)
+      var i = 0
+      var out = None: Option[Map[String, NDArray]]
+      while (i < trainPartitionSize) {
+        if (i % batchSize == 0) {
+          it.copyToArray(input, 0, batchSize)
+          out = Some(workerStore.get[DFCaffeNet]("net").forward(input.iterator, List("ip1")))
         }
-        featureBatch.iterator
+        featurizedData(i) = out.get("ip1").slice(0, i % batchSize).toFlat()
+        i += 1
       }
-    )
-    featureBatchRDD.foreachPartition(_ => ())
+      featurizedData.iterator
+    })
 
-    log("finished featurizing")
+    logger.log("featurized " + featurizedDF.count().toString + " images")
   }
 }

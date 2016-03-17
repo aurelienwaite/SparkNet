@@ -33,13 +33,13 @@ object NPLMTestApp {
       println(f.map(_.toInt).mkString(",") + s"\t$l" )
     }
     val solverBuilder = buildSolverProto(0, 0, asArrays.size) _
-    initialiseCaffeLibrary("/misc/home/rwaite/mt-software/SparkNet", new File("/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/nplm_prob.conf"), 4, solverBuilder)
+    /*initialiseCaffeLibrary("/misc/home/rwaite/mt-software/SparkNet", new File("/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/nplm_prob.conf"), 4, solverBuilder)
     val testNet = workerStore.getNet("net")
     testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/good.caffemodel")
     computePerplexity(testNet, asArrays)
     val weights = testNet.getWeights()
     testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/caffe_snapshot/sparknet_epoch_45")
     //testNet.setWeights(weights)
-    computePerplexity(testNet, asArrays)
+    computePerplexity(testNet, asArrays)*/
   }
 }

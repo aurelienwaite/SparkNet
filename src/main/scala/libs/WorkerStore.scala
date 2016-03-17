@@ -1,37 +1,15 @@
 package libs
 
-import libs._
+import scala.collection.mutable.Map
 
 class WorkerStore() {
-  var nets: Map[String, CaffeNet] = Map()
-  var caffeLib: Option[CaffeLibrary] = None
+  val store = Map[String, Any]()
 
-  def setNet(name: String, net: CaffeNet) = {
-    nets += (name -> net)
-    setLib(net.caffeLib)
+  def get[T](key: String): T = {
+    store(key).asInstanceOf[T]
   }
 
-  def getNet(name: String): CaffeNet = {
-    return nets(name)
+  def put(key: String, value: Any) = {
+    store += (key -> value)
   }
-
-  def initialized() = caffeLib.isDefined
-
-  def setLib(library: CaffeLibrary) = {
-    caffeLib = Option(library)
-  }
-
-  def getLib(): CaffeLibrary = {
-    assert(!caffeLib.isEmpty)
-    return caffeLib.get
-  }
-
-  def reset() = {
-    nets = Map()
-    for(_ <- caffeLib) {
-      CaffeLibrary.Instance.dispose()
-    }
-    caffeLib = None
-  }
-
 }
