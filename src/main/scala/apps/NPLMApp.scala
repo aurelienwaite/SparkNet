@@ -222,7 +222,7 @@ object NPLMApp {
       def update()
     }
     @transient lazy val solver = new FloatSGDSolver(solverParam) with Updatable{
-      override def update() = super.ApplyUpdate()
+      override def update() = ()
     }
     @transient lazy val net = CaffeNet(solverParam.net_param)
 

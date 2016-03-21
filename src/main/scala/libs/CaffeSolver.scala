@@ -14,7 +14,8 @@ class CaffeSolver(solverParam: SolverParameter, schema: StructType, preprocessor
 
   def step(rowIt: Iterator[Row]) {
     trainNet.forwardBackward(rowIt)
-    super.ApplyUpdate()
+    //super.ApplyUpdate()
+    ()
   }
 
 }
