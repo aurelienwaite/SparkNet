@@ -2,6 +2,8 @@ import AssemblyKeys._
 
 assemblySettings
 
+scalaVersion := "2.10.6"
+
 // to regenerate the Java protobuf files, run:
 // protoc -I=$SPARKNET_HOME/caffe/src/caffe/proto/ --java_out=$SPARKNET_HOME/src/main/scala/protobuf/' $SPARKNET_HOME/caffe/src/caffe/proto/caffe.proto
 
