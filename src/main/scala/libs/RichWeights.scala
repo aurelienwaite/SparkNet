@@ -43,14 +43,16 @@ case class RichWeights(w: Weights){
 
   def subtract(other: Weights) = applyOp((_-_), other)
 
-  def scalarDivide(v: Float): Weights =
-    for ((k, blobs) <- w) yield
-      k -> (for (b <- blobs) yield
-        Blob(b.shape, b.data.map(_ / v)))
-
-
-  def /(v: Float) = scalarDivide(v)
-
+  /**
+    * In place divide
+    * @param v
+    */
+  def scalarDivide(v: Float): Unit =
+    for {
+      (k, blobs) <- w
+      b <- blobs
+      i <- 0 until b.data.size
+    } b.data(i) = b.data(i) / v
 
 }
 

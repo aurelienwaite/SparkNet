@@ -1,8 +1,11 @@
 package apps
 
-import java.io.File
+import java.io.{File, FileOutputStream}
 
-import org.apache.spark.{SparkContext, SparkConf}
+import com.esotericsoftware.kryo.Kryo
+import com.esotericsoftware.kryo.io.Output
+import org.apache.spark.{SparkConf, SparkContext}
+import libs.RichWeights._
 
 /**
   * Created by rorywaite on 01/03/2016.
@@ -31,8 +34,9 @@ object NPLMTestApp {
     val minibatches = makeMinibatches(devSet.collect(),1).toSeq
 
     val trainBatches = makeMinibatches(devSet.collect(), 64).toSet
-    val solverBuilder = buildSolverProto(0, 0, minibatches.size) _
-    val testNet = initialiseCaffeLibrary("/misc/home/rwaite/mt-software/SparkNet", new File("/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/nplm_prob.conf"), 4, solverBuilder)
+    val testNet = initialiseCaffeLibrary("/misc/home/rwaite/mt-software/SparkNet",
+      new File("/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/nplm_prob.conf"),
+      4, 1, 1, minibatches.size)
     val randomWeights = testNet.getWeights()
     testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/good.caffemodel")
     println("weights loaded")
@@ -43,9 +47,18 @@ object NPLMTestApp {
     computePerplexity(testNet, minibatches)
     //testNet.setWeights(weights)
     //computePerplexity(testNet, minibatches)
-    testNet.train(trainBatches.take(50).toSeq)
+    val toTrain = trainBatches.take(50).toSeq
+    println(s"Hello! ${toTrain.size}")
+    testNet.train(toTrain)
     val trained = testNet.getWeights()
     testNet.setWeights(trained)
     computePerplexity(testNet, minibatches)
+    val diff = trained subtract randomWeights
+    val kryo = new Kryo();
+    val output = new Output(new FileOutputStream("/tmp/diff.bin"));
+    kryo.writeObject(output, diff)
+    output.close()
+
+    //println(diff)
   }
 }

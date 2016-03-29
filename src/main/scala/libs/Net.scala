@@ -1,27 +1,35 @@
 package libs
 
-import java.io.File
+import java.io.{Externalizable, File, ObjectInput, ObjectOutput}
 import java.net.URLDecoder
 
-import scala.util.Random
 import com.sun.jna.Pointer
 import com.sun.jna.Memory
 
-import scala.collection.mutable.Map
-import scala.collection.mutable.MutableList
-import caffe._
-import caffe.Caffe._
-import libs._
+case class Minibatch(data: Array[Float], label: Array[Float]) extends Serializable
 
+class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializable {
 
-case class Minibatch(data: Array[Float], label: Array[Float])
+  private class LibHolder {
+    CaffeLibrary.Instance.dispose()
+    val caffeLib = CaffeLibrary.Instance.get(libLocation)
+    val state = caffeLib.create_state()
+    val ptr = new Memory(solverParam.length)
+    ptr.write(0, solverParam, 0, solverParam.length)
+    caffeLib.load_solver_from_protobuf(state, ptr, solverParam.length)
+    val numLayers = caffeLib.num_layers(state)
+    val layerNames = List.range(0, numLayers).map(i => caffeLib.layer_name(state, i))
+    val layerNumBlobs = List.range(0, numLayers).map(i => caffeLib.num_layer_weights(state, i))
+    val dtypeSize = caffeLib.get_dtype_size()
+    val intSize = caffeLib.get_int_size()
+  }
 
-class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary){
-  val numLayers = caffeLib.num_layers(state)
-  val layerNames = List.range(0, numLayers).map(i => caffeLib.layer_name(state, i))
-  val layerNumBlobs = List.range(0, numLayers).map(i => caffeLib.num_layer_weights(state, i))
-  val dtypeSize = caffeLib.get_dtype_size()
-  val intSize = caffeLib.get_int_size()
+  @transient private lazy val lib = new LibHolder
+
+  import lib._
+
+  // Ensures that the net's parameters are serialised across the Spark cluster
+  private var weightCache = syncWeights
 
   trait AssignableMinibatches {
     var minibatches: Option[Iterator[Array[Float]]] = None;
@@ -32,19 +40,57 @@ class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary){
       val m = minibatches.getOrElse(sys.error("Minibatch not set!"))
       assert(m.hasNext, "Run out of minibatches")
       val buffer = m.next()
-      //log.info(s"Writing minibatch of length ${buffer.length} to Caffe")
       data.write(0, buffer, 0, buffer.size)
     }
   }
 
   // Callbacks need to be referenced somewhere, otherwise they will be garbage collected before caffe can call them
-  val dataCallback = makeCallback()
-  val labelCallback = makeCallback()
+  @transient lazy val dataCallback = makeCallback()
+  @transient lazy val labelCallback = makeCallback()
 
   private def setData(in: Seq[Minibatch]) = {
+    assert(weightCache.size == numLayers)
+    for (i <- 0 to numLayers - 1) {
+      val layer = weightCache.getOrElse(layerNames(i), sys.error(s"Caffe net does not contain layer ${layerNames(i)}"))
+      assert(layer.length == layerNumBlobs(i), s"Different number of blobs ${layer.length} vs ${layerNumBlobs(i)}")
+      for (j <- 0 to layerNumBlobs(i) - 1) {
+        val blob = layer(j)
+        val caffeBlob = caffeLib.get_weight_blob(state, i, j)
+        val shape = getShape(caffeBlob)
+        assert(shape.deep == blob.shape.deep) // check that weights are the correct shape
+        val blob_pointer = caffeLib.get_data(caffeBlob)
+        val size = shape.product
+        var t = 0
+        while (t < size) {
+          blob_pointer.setFloat(dtypeSize * t, blob.data(t))
+          t += 1
+        }
+      }
+    }
     dataCallback.minibatches = Option(in.map(_.data).toIterator)
     labelCallback.minibatches = Option(in.map(_.label).toIterator)
   }
+
+  private def syncWeights = {
+    val w = for (i <- 0 to numLayers - 1) yield {
+      layerNames(i) -> (for (j <- 0 to layerNumBlobs(i) - 1) yield {
+        val blob = caffeLib.get_weight_blob(state, i, j)
+        val shape = getShape(blob)
+        val data = new Array[Float](shape.product)
+        val blob_pointer = caffeLib.get_data(blob)
+        val size = shape.product
+        var t = 0
+        while (t < size) {
+          data(t) = blob_pointer.getFloat(dtypeSize * t)
+          t += 1
+        }
+        Blob(shape, data)
+      })
+    }
+    w.toMap
+  }
+
+
 
   def train(in: Seq[Minibatch]) = {
     caffeLib.set_mode_cpu()
@@ -52,6 +98,7 @@ class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary){
     caffeLib.set_train_data_callback(state, 0, dataCallback)
     caffeLib.set_train_data_callback(state, 1, labelCallback)
     caffeLib.solver_step(state, in.size)
+    weightCache = syncWeights
   }
 
   private def testInit(numMinibatches: Int): Int = {
@@ -72,7 +119,7 @@ class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary){
   }
 
 
-  def forward() = {
+  /*def forward() = {
     caffeLib.set_mode_cpu()
     caffeLib.forward(state)
   }
@@ -80,46 +127,14 @@ class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary){
   def backward() = {
     caffeLib.set_mode_cpu()
     caffeLib.backward(state)
-  }
+  }*/
 
   def setWeights(w: Weights) = {
-    assert(w.size == numLayers)
-    for (i <- 0 to numLayers - 1) {
-      val layer = w.getOrElse(layerNames(i), sys.error(s"Caffe net does not contain layer ${layerNames(i)}"))
-      assert(layer.length == layerNumBlobs(i), s"Different number of blobs ${layer.length} vs ${layerNumBlobs(i)}")
-      for (j <- 0 to layerNumBlobs(i) - 1) {
-        val blob = layer(j)
-        val caffeBlob = caffeLib.get_weight_blob(state, i, j)
-        val shape = getShape(caffeBlob)
-        assert(shape.deep == blob.shape.deep) // check that weights are the correct shape
-        val blob_pointer = caffeLib.get_data(caffeBlob)
-        val size = shape.product
-        var t = 0
-        while (t < size) {
-          blob_pointer.setFloat(dtypeSize * t, blob.data(t))
-          t += 1
-        }
-      }
-    }
+    weightCache = w
   }
 
   def getWeights(): Weights = {
-    val res = for (i <- 0 to numLayers - 1) yield {
-      layerNames(i) ->  (for (j <- 0 to layerNumBlobs(i) - 1) yield {
-        val blob = caffeLib.get_weight_blob(state, i, j)
-        val shape = getShape(blob)
-        val data = new Array[Float](shape.product)
-        val blob_pointer = caffeLib.get_data(blob)
-        val size = shape.product
-        var t = 0
-        while (t < size) {
-          data(t) = blob_pointer.getFloat(dtypeSize * t)
-          t += 1
-        }
-        Blob(shape, data)
-      })
-    }
-    res.toMap
+    weightCache
   }
 
   def loadWeightsFromFile(filename: String) {
@@ -138,19 +153,10 @@ class CaffeNet(state: Pointer, val caffeLib: CaffeLibrary){
     }
     return shape
   }
+
 }
 
 object CaffeNet {
-
-  def apply(caffeLib: CaffeLibrary, solverParameter: SolverParameter): CaffeNet = {
-    val caffeLib = CaffeLibrary.Instance.get()
-    val state = caffeLib.create_state()
-    val byteArr = solverParameter.toByteArray()
-    val ptr = new Memory(byteArr.length)
-    ptr.write(0, byteArr, 0, byteArr.length)
-    caffeLib.load_solver_from_protobuf(state, ptr, byteArr.length)
-    new CaffeNet(state, caffeLib)
-  }
 
   def getSparkNetHome(): Option[String]= {
     val env = sys.env.get("SPARKNET_HOME")

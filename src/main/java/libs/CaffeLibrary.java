@@ -6,25 +6,22 @@ public interface CaffeLibrary extends Library {
 
   class Instance{
 
-    private static final String LIB_NAME="ccaffe";
     static CaffeLibrary l = null;
+    static String libName = null;
 
     public synchronized static CaffeLibrary get(String fileName) {
-      if(l!= null) throw new RuntimeException("Library already loaded!");
+      if(l!= null) return l;
       l = (CaffeLibrary)Native.loadLibrary(fileName, CaffeLibrary.class);
+      libName = fileName;
       return l;
     }
 
-    public synchronized static CaffeLibrary get() {
-      if(l == null){
-        l = (CaffeLibrary)Native.loadLibrary(LIB_NAME, CaffeLibrary.class);
-      }
-      return l;
-    }
 
     public synchronized static void dispose() {
+      if(l==null) return;
       l = null;
-      NativeLibrary.getInstance(LIB_NAME).dispose();
+      libName = null;
+      NativeLibrary.getInstance(libName).dispose();
     }
   }
 
