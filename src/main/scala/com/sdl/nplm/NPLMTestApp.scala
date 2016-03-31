@@ -1,11 +1,11 @@
-package apps
+package com.sdl.nplm
 
 import java.io.{File, FileOutputStream}
 
 import com.esotericsoftware.kryo.Kryo
 import com.esotericsoftware.kryo.io.Output
 import org.apache.spark.{SparkConf, SparkContext}
-import libs.RichWeights._
+import com.sdl.caffe.RichWeights._
 
 /**
   * Created by rorywaite on 01/03/2016.
@@ -30,26 +30,26 @@ object NPLMTestApp {
     }
     sys.exit()*/
 
-    val devSet = sqlContext.read.parquet("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/models/lm.nplm-samples.s0.t5.v20000/dev.parquet")
-    val minibatches = makeMinibatches(devSet.collect(),1).toSeq
+    val devSet = sqlContext.read.parquet("/misc/home/rwaite/mt-work/exps/WMT15_ENDE_NN/models/dev.parquet").collect()
+    val minibatches = makeMinibatches(devSet,12).toSeq
 
-    val trainBatches = makeMinibatches(devSet.collect(), 64).toSet
+    val trainBatches = makeMinibatches(devSet, 64).toSet
     val testNet = initialiseCaffeLibrary("/misc/home/rwaite/mt-software/SparkNet",
-      new File("/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/nplm_prob.conf"),
-      4, 1, 1, minibatches.size)
+      new File("/misc/home/rwaite/mt-work/exps/WMT15_ENDE_NN/spark_net/nplm_prob.conf"),
+      4, 1, 1, minibatches.size, 64,12)
     val randomWeights = testNet.getWeights()
-    testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/good.caffemodel")
-    println("weights loaded")
+    //testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/good.caffemodel")
+    //println("weights loaded")
     computePerplexity(testNet, minibatches)
-    val weights = testNet.getWeights()
-    //testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/caffe_snapshot/sparknet_epoch_45")
-    testNet.setWeights(randomWeights)
+    //val weights = testNet.getWeights()
+    testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/caffe_snapshot/sparknet_epoch_45")
+    //testNet.setWeights(randomWeights)
     computePerplexity(testNet, minibatches)
     //testNet.setWeights(weights)
     //computePerplexity(testNet, minibatches)
     val toTrain = trainBatches.take(50).toSeq
     println(s"Hello! ${toTrain.size}")
-    testNet.train(toTrain)
+    testNet.train(toTrain, None)
     val trained = testNet.getWeights()
     testNet.setWeights(trained)
     computePerplexity(testNet, minibatches)

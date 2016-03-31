@@ -1,19 +1,17 @@
 // This file should be extended and tested more
 
-package libs
-
-import scala.collection.JavaConverters._
-import scala.collection.mutable.ListBuffer
+package com.sdl.caffe
 
 import caffe._
 import caffe.Caffe._
+import scala.collection.JavaConverters._
 
 object Include extends Enumeration {
   type Include = Value
   val Train, Test = Value
 }
 
-import Include._
+import com.sdl.caffe.Include._
 
 object RDDLayer {
   def apply(name: String, shape: List[java.lang.Long], include: Option[Include]) : LayerParameter = {

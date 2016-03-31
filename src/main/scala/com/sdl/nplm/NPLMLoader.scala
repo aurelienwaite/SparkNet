@@ -1,12 +1,8 @@
-package loaders
-
-import java.io.{File, FileInputStream}
+package com.sdl.nplm
 
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.regression.LabeledPoint
-import org.apache.spark.{SparkContext, SparkConf}
-
-import scala.util.Random
+import org.apache.spark.{SparkConf, SparkContext}
 
 /**
  * Assumes that we have a numberized n-grams on HDFS. This is then converted to a parquet file

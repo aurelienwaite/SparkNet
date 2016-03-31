@@ -1,7 +1,9 @@
-package libs
+package com.sdl.caffe
 
 import java.io.{Externalizable, File, ObjectInput, ObjectOutput}
 import java.net.URLDecoder
+
+import scala.concurrent.duration._
 
 import com.sun.jna.Pointer
 import com.sun.jna.Memory
@@ -29,7 +31,7 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
   import lib._
 
   // Ensures that the net's parameters are serialised across the Spark cluster
-  private var weightCache = syncWeights
+  private var weightCache = caffeToWeights
 
   trait AssignableMinibatches {
     var minibatches: Option[Iterator[Array[Float]]] = None;
@@ -48,7 +50,7 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
   @transient lazy val dataCallback = makeCallback()
   @transient lazy val labelCallback = makeCallback()
 
-  private def setData(in: Seq[Minibatch]) = {
+  private def syncCacheToCaffe() = {
     assert(weightCache.size == numLayers)
     for (i <- 0 to numLayers - 1) {
       val layer = weightCache.getOrElse(layerNames(i), sys.error(s"Caffe net does not contain layer ${layerNames(i)}"))
@@ -67,11 +69,14 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
         }
       }
     }
+  }
+
+  private def setData(in: Seq[Minibatch]) = {
     dataCallback.minibatches = Option(in.map(_.data).toIterator)
     labelCallback.minibatches = Option(in.map(_.label).toIterator)
   }
 
-  private def syncWeights = {
+  private def caffeToWeights = {
     val w = for (i <- 0 to numLayers - 1) yield {
       layerNames(i) -> (for (j <- 0 to layerNumBlobs(i) - 1) yield {
         val blob = caffeLib.get_weight_blob(state, i, j)
@@ -90,15 +95,33 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
     w.toMap
   }
 
+  /**
+    * Returns true if all minibatches trained, otherwise returns false if
+    * times out
+    *
+    * @param in Minibatchers
+    * @param maxTime The maximum duration to spend training
+    * @return
+    */
+  private def timedTrain(in: Seq[Minibatch], maxTime: Duration): (Boolean, Duration) = {
+    val start = System.currentTimeMillis()
+    for(_ <- in) {
+      val elapsed = Duration(System.currentTimeMillis() - start, MILLISECONDS)
+      if(elapsed < maxTime) caffeLib.solver_step(state, 1) else return (false, elapsed)
+    }
+    (true, Duration(System.currentTimeMillis() - start, MILLISECONDS))
+  }
 
-
-  def train(in: Seq[Minibatch]) = {
+  def train(in: Seq[Minibatch], maxTime: Option[Duration]) = {
     caffeLib.set_mode_cpu()
+    syncCacheToCaffe()
     setData(in)
     caffeLib.set_train_data_callback(state, 0, dataCallback)
     caffeLib.set_train_data_callback(state, 1, labelCallback)
-    caffeLib.solver_step(state, in.size)
-    weightCache = syncWeights
+    val t = maxTime.getOrElse(Duration.Inf)
+    val allTrained = timedTrain(in, t);
+    weightCache = caffeToWeights
+    allTrained
   }
 
   private def testInit(numMinibatches: Int): Int = {
@@ -109,12 +132,21 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
   }
 
   def test(toTest: Seq[Minibatch]): IndexedSeq[Float] = {
-    setData(toTest)
-    caffeLib.set_test_data_callback(state, 0, dataCallback)
-    caffeLib.set_test_data_callback(state, 1, labelCallback)
-    val numTestScores = testInit(toTest.size)
-    for (i <- 0 to numTestScores - 1) yield {
-      caffeLib.get_test_score(state, i) // for accuracy layers, this returns the average accuracy over a minibatch
+    syncCacheToCaffe()
+    // Testing over a large number of minibatches causes caffe to freeze. Instead, iterate over a subset. The number
+    // is set by testGrouping, which is just a sensible default
+    val testGrouping = 10
+    val res = for(group <- toTest.grouped(testGrouping)) yield {
+      setData(group)
+      caffeLib.set_test_data_callback(state, 0, dataCallback)
+      caffeLib.set_test_data_callback(state, 1, labelCallback)
+      val numTestScores = testInit(group.size)
+      for (i <- 0 to numTestScores - 1) yield {
+        caffeLib.get_test_score(state, i) // for softmax layers, this returns the sum of the averaged minibatch loss
+      }
+    }
+    res.reduce{(scoresA, scoresB) =>
+      for ((a,b) <- scoresA zip scoresB) yield a + b
     }
   }
 
@@ -139,9 +171,11 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
 
   def loadWeightsFromFile(filename: String) {
     caffeLib.load_weights_from_file(state, filename)
+    weightCache = caffeToWeights
   }
 
   def saveWeightsToFile(filename: String) {
+    syncCacheToCaffe()
     caffeLib.save_weights_to_file(state, filename)
   }
 

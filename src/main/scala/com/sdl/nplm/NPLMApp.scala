@@ -1,37 +1,40 @@
-package apps
+package com.sdl.nplm
 
 import java.io._
 
 import caffe.Caffe._
 import caffe.Caffe.SolverParameter.SolverMode.CPU
 import com.google.protobuf.TextFormat
-import libs._
-import libs.RichWeights._
+import com.sdl.caffe._
+import com.sdl.caffe.ProtoLoader
+import com.sdl.caffe.RichWeights._
 import org.apache.log4j.{Level, Logger}
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext, SparkEnv}
 import org.apache.spark.mllib.linalg
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Row
 import org.apache.spark.storage.StorageLevel
 
 import scala.annotation.tailrec
+import scala.concurrent.duration._
 import scala.util.Random
 
 
 object NPLMApp {
   val trainBatchSize = 64
-  val testBatchSize = 1
+  //TODO: Should be settable. Need some logic to pad with zeros
+  val testBatchSize = 12
   val channels = 1
   val height = 1
-  // After model parameters are computed, we need to redestribute and add them together so as not
+  // After model parameters are computed, we need to redistribute and add them together so as not
   // to overwhelm the driver. This number tells the driver how many submodels to use
   val coalescedModels = 10
   // compute perplexity after set number of sync intervals
   val perplexityInterval = 10
-
-  def time(f: => Unit)={
-    val s = System.currentTimeMillis
-    f
-    (System.currentTimeMillis - s) / 1000
+  //Scala can't determine the implicit for the repartition ordering. Specify exactly
+  def repartitionOrdering = new Ordering[(Weights, Duration, Set[String])]{
+    override def compare(x: (Weights, Duration, Set[String]), y: (Weights, Duration, Set[String])) =
+      weightOrdering.compare(x._1, y._1)
   }
 
   def rowToArrays(in: Seq[Row]) = {
@@ -80,8 +83,8 @@ object NPLMApp {
   def initialiseCaffeLibrary(
                             sparkNetHome: String,
                             netPrototext: File,
-                            ngramSize: Int,
-                            epoch: Int, lr: Float, testIter: Int
+                            ngramSize: Int, epoch: Int, lr: Float, testIter: Int, trainBatchSize: Int,
+                            testBatchSize: Int
                             ) = {
     logNplm(sys.props.get("jna.library.path").getOrElse("jna.library.path not set"))
     val libLocation = sparkNetHome + "/build/libccaffe.so"
@@ -99,7 +102,20 @@ object NPLMApp {
     logNplm("Computing perplexity")
     val logged = testNet.test(devSet)
     assert(logged.size > 0, "No test results")
-    val newPerperplexity = Math.exp(logged(0)/devSet.size)
+    val newPerperplexity = Math.exp(logged(0)/devSet.length)
+    logNplm(s"Perplexity: $newPerperplexity")
+    newPerperplexity
+  }
+
+  def computePerplexity(testNets: RDD[CaffeNet], devSet: RDD[Minibatch], devSetLength: Int) = {
+    logNplm("Computing perplexity")
+    val logged = testNets.zipPartitions(devSet) { (iterN, iterM) =>
+      assert(iterN.hasNext, "No neural network!")
+      for(testNet <- iterN) yield
+        testNet.test(iterM.toSeq)
+    }.reduce{ (scoresA, scoresB) => for((a,b) <- scoresA zip scoresB) yield a + b}
+    assert(logged.size > 0, "No test results")
+    val newPerperplexity = Math.exp(logged(0)/devSetLength)
     logNplm(s"Perplexity: $newPerperplexity")
     newPerperplexity
   }
@@ -114,7 +130,8 @@ object NPLMApp {
                      sparkNetHomeOpt: Option[String] = CaffeNet.getSparkNetHome(),
                      startLearningRate: Float = 1.0f,
                      numEpochs: Int = 50,
-                     samplePercentage: Option[Double] = None
+                     samplePercentage: Option[Double] = None,
+                     maxWorkerTime: Option[Duration] = None
                    )
 
   def main(args: Array[String]) {
@@ -147,6 +164,9 @@ object NPLMApp {
       opt[Double]('l', "learning_rate") valueName("initial learning rate") action { (x, c) =>
         c.copy(startLearningRate = x.toFloat)
       }
+      opt[Long]('m', "max_worker_time") valueName("Stop workers that continue after this time (minutes)") action { (x, c) =>
+        c.copy(maxWorkerTime = Option(x.minutes))
+      }
     }
     val cliConf = parser.parse(args, Config()).getOrElse(sys.exit(1))
     import cliConf._
@@ -173,9 +193,14 @@ object NPLMApp {
 
     // Prepare dev set
     val devSet = sqlContext.read.parquet(devSetFile).collect()
-    val devSetMinibatches = makeMinibatches(devSet, 1).toVector
+    val devSetMinibatches = makeMinibatches(devSet, testBatchSize).toVector
     logNplm(s"Dev set contains ${devSet.length} records")
-
+    /*
+     * When initialising the weights on workers, we check that the weights are in sync. We do this
+     * by computing the perplexity on a small amount of dev data
+     */
+    val miniDevSet = devSetMinibatches.take(100)
+    val devSetRDD = sc.parallelize(devSetMinibatches).repartition(numWorkers).cache
 
     // Prepare training set
     val loadedTrainSet = sqlContext.read.parquet(trainSetFile)
@@ -212,7 +237,8 @@ object NPLMApp {
       }
       val epoch = trainPartitionSizes.min
 
-      val driverNet = initialiseCaffeLibrary(sparkNetHome, netPrototext, ngramSize, epoch, learningRate, devSet.size)
+      val driverNet = initialiseCaffeLibrary(sparkNetHome, netPrototext, ngramSize, epoch, learningRate,
+        devSetMinibatches.size, trainBatchSize, testBatchSize)
       epochWeights.map(driverNet.setWeights(_))
       // Initialise the nets. Using a RDD in this way means that if a worker fails, then it will retrieve the latest
       // weights from the driver.
@@ -220,9 +246,10 @@ object NPLMApp {
       val nets = minibatched.mapPartitions(_ => Iterator(driverNet)).cache()
       //Debugging to make sure all nets are synced correctly
       val initialPerplexities = nets.map{ net =>
-         Set(computePerplexity(net, devSetMinibatches))
+         Set(computePerplexity(net, miniDevSet))
       }.reduce(_ union _)
       logNplm(s"Initial perplexities are: $initialPerplexities")
+      assert(initialPerplexities.size == 1, "Nets are not correctly synced")
 
       val numIterations = epoch / syncInterval
 
@@ -230,13 +257,13 @@ object NPLMApp {
       def iterate(update: Weights, iterationCounter: Int): Weights = {
         val i = numIterations - iterationCounter
         if(i % perplexityInterval == 0 ) {
-          val perplexity = computePerplexity(driverNet, devSetMinibatches)
+          val perplexity = computePerplexity(nets, devSetRDD, devSetMinibatches.length)
           logNplm(s"For iteration $i perplexity: $perplexity")
         }
         logNplm("broadcasting weights")
         val broadcastWeights = sc.broadcast(update)
         logNplm("training")
-        val trained = nets.zipPartitions(minibatched){ (netIt, trainMinibatchIt) => {
+        val trained = nets.zipPartitions(minibatched){ (netIt, trainMinibatchIt) =>
           assert(netIt.hasNext, "No network for partition")
           val net = netIt.next()
           logNplm("setting weights on worker")
@@ -245,22 +272,23 @@ object NPLMApp {
           logNplm("running minibatches")
           assert(trainMinibatchIt.hasNext, "Run out of minibatches")
           val toTrain = trainMinibatchIt.drop(syncInterval * i).take(syncInterval).toSeq
-          val elapsed = time {
-            net.train(toTrain)
-          }
+          val (allTrained, elapsed) = net.train(toTrain, maxWorkerTime)
+          val executorId = if(allTrained) Set.empty[String] else Set(SparkEnv.get.executorId)
           val diff = net.getWeights() subtract updatedWeights
           net.setWeights(updatedWeights)
-          Iterator((diff, elapsed))
-        }
+          Iterator((diff, elapsed, executorId))
         }.persist(StorageLevel.MEMORY_ONLY_SER)
         logNplm("collecting weights")
-        def reducer(a:(Weights, Long), b:(Weights, Long)) = (a._1 add b._1, Math.max(a._2, b._2))
-        val repartitioned = trained.repartition(coalescedModels).persist(StorageLevel.MEMORY_ONLY_SER)
+        def reducer(a:(Weights, Duration, Set[String]), b:(Weights, Duration, Set[String])) =
+          (a._1 add b._1, a._2 max b._2, a._3 union b._3)
+        val repartitioned = trained.repartition(coalescedModels)(repartitionOrdering)
+          .persist(StorageLevel.MEMORY_ONLY_SER)
         val reduced = repartitioned.mapPartitions{ iter =>
           Iterator(iter.reduce(reducer(_,_)))
         }.persist(StorageLevel.MEMORY_ONLY_SER)
-        val (diff, elapsed) = reduced.reduce(reducer(_,_))
-        logNplm(s"caffe library completed in $elapsed seconds")
+        val (diff, elapsed, terminatedExecutors) = reduced.reduce(reducer(_,_))
+        logNplm(s"caffe library completed in ${elapsed.toMinutes} minutes")
+        logNplm(s"The following executors were took longer than the max time: $terminatedExecutors")
         diff.scalarDivide(numWorkers.toFloat)
         driverNet.setWeights(driverNet.getWeights() add diff)
         if (iterationCounter == 1)
@@ -275,8 +303,7 @@ object NPLMApp {
       val snapshotPath = s"$snapshotPrefix/sparknet_epoch_${numEpochs - epochCounter}"
       logNplm(s"saving weights to $snapshotPath")
       driverNet.saveWeightsToFile(snapshotPath)
-      val newPerplexity = computePerplexity(driverNet, devSetMinibatches)
-
+      val newPerplexity = computePerplexity(nets, devSetRDD, devSetMinibatches.length)
       val (updatedLr, updatedWeights, updatedPerplexity) = if(newPerplexity > perplexity){
         logNplm("halving learning rate")
         (learningRate/2f, optimisedWeights, newPerplexity)

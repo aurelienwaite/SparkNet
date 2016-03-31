@@ -1,6 +1,6 @@
 // Utilities for loading models from caffe .prototxt files
 
-package libs
+package com.sdl.caffe
 
 import caffe._
 import caffe.Caffe._

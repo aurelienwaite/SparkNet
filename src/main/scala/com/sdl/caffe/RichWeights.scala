@@ -1,6 +1,6 @@
-package libs
+package com.sdl.caffe
 
-import scala.collection.mutable
+import scala.language.implicitConversions
 
 /**
   * Created by rorywaite on 23/03/2016.

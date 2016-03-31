@@ -1,4 +1,4 @@
-package libs;
+package com.sdl.caffe;
 
 import com.sun.jna.*;
 
@@ -16,12 +16,11 @@ public interface CaffeLibrary extends Library {
       return l;
     }
 
-
     public synchronized static void dispose() {
       if(l==null) return;
       l = null;
-      libName = null;
       NativeLibrary.getInstance(libName).dispose();
+      libName = null;
     }
   }
 
