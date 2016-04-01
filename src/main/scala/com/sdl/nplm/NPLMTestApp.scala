@@ -5,7 +5,7 @@ import java.io.{File, FileOutputStream}
 import com.esotericsoftware.kryo.Kryo
 import com.esotericsoftware.kryo.io.Output
 import org.apache.spark.{SparkConf, SparkContext}
-import com.sdl.caffe.RichWeights._
+import com.sdl.caffe.WeightOps
 
 /**
   * Created by rorywaite on 01/03/2016.
@@ -33,29 +33,36 @@ object NPLMTestApp {
     val devSet = sqlContext.read.parquet("/misc/home/rwaite/mt-work/exps/WMT15_ENDE_NN/models/dev.parquet").collect()
     val minibatches = makeMinibatches(devSet,12).toSeq
 
-    val trainBatches = makeMinibatches(devSet, 64).toSet
+    val trainBatches = makeMinibatches(devSet, 500).toSet
     val testNet = initialiseCaffeLibrary("/misc/home/rwaite/mt-software/SparkNet",
       new File("/misc/home/rwaite/mt-work/exps/WMT15_ENDE_NN/spark_net/nplm_prob.conf"),
-      4, 1, 1, minibatches.size, 64,12)
+      4, 1, 1, minibatches.size, 500,12)
     val randomWeights = testNet.getWeights()
     //testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/good.caffemodel")
     //println("weights loaded")
-    computePerplexity(testNet, minibatches)
+    //computePerplexity(testNet, minibatches)
     //val weights = testNet.getWeights()
-    testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/caffe_snapshot/sparknet_epoch_45")
+    //testNet.loadWeightsFromFile("/misc/home/rwaite/mt-work/exps/G0013.NN/translation.model.v2/spark_net/caffe_snapshot/sparknet_epoch_45")
     //testNet.setWeights(randomWeights)
-    computePerplexity(testNet, minibatches)
+    //computePerplexity(testNet, minibatches)
     //testNet.setWeights(weights)
     //computePerplexity(testNet, minibatches)
-    val toTrain = trainBatches.take(50).toSeq
+    /*println("Testing ops")
+    val zeros = WeightOps.subtract(randomWeights,randomWeights)
+    println("testing summed")
+    val summed =   WeightOps.diffAdd(zeros, WeightOps.scalarDivide(zeros,1))
+    val newWeights = WeightOps.netAdd(randomWeights, summed)
+    testNet.setWeights(newWeights)            */
+    val toTrain = trainBatches.take(10).toSeq
     println(s"Hello! ${toTrain.size}")
     testNet.train(toTrain, None)
     val trained = testNet.getWeights()
     testNet.setWeights(trained)
-    computePerplexity(testNet, minibatches)
-    val diff = trained subtract randomWeights
+    //computePerplexity(testNet, minibatches)
+    println("starting subtract")
+    val diff = WeightOps.subtract(trained, randomWeights)
     val kryo = new Kryo();
-    val output = new Output(new FileOutputStream("/tmp/diff.bin"));
+    val output = new Output(new FileOutputStream("/tmp/diff_large_vocab.bin"));
     kryo.writeObject(output, diff)
     output.close()
 

@@ -1,10 +1,9 @@
 package com.sdl.caffe
 
-import java.io.{Externalizable, File, ObjectInput, ObjectOutput}
+import java.io._
 import java.net.URLDecoder
 
 import scala.concurrent.duration._
-
 import com.sun.jna.Pointer
 import com.sun.jna.Memory
 
@@ -51,24 +50,30 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
   @transient lazy val labelCallback = makeCallback()
 
   private def syncCacheToCaffe() = {
-    assert(weightCache.size == numLayers)
-    for (i <- 0 to numLayers - 1) {
-      val layer = weightCache.getOrElse(layerNames(i), sys.error(s"Caffe net does not contain layer ${layerNames(i)}"))
-      assert(layer.length == layerNumBlobs(i), s"Different number of blobs ${layer.length} vs ${layerNumBlobs(i)}")
-      for (j <- 0 to layerNumBlobs(i) - 1) {
-        val blob = layer(j)
+    val byteIn = new DataInputStream(new ByteArrayInputStream(weightCache))
+    val cachedLayerLength = byteIn.readInt
+    assert(cachedLayerLength == numLayers, s"Number of layers do not match $cachedLayerLength vs $numLayers")
+    for (i <- 0 until numLayers) {
+      val layerName = byteIn.readUTF()
+      assert(layerName == layerNames(i), s"Layer names do not match $layerName vs ${layerNames(i)}")
+      val cachedBlobLength = byteIn.readInt()
+      assert(cachedBlobLength == layerNumBlobs(i), s"Different number of blobs $cachedBlobLength vs ${layerNumBlobs(i)}")
+      for (j <- 0 until layerNumBlobs(i)) {
+        val cachedShapeLength = byteIn.readInt
+        val cachedShape = (for(_ <- 0 until cachedShapeLength) yield byteIn.readInt).toArray
         val caffeBlob = caffeLib.get_weight_blob(state, i, j)
         val shape = getShape(caffeBlob)
-        assert(shape.deep == blob.shape.deep) // check that weights are the correct shape
+        assert(shape.deep == cachedShape.deep, s"$layerName blob $j shapes do not match ${shape.deep} vs ${cachedShape.deep}")
         val blob_pointer = caffeLib.get_data(caffeBlob)
         val size = shape.product
         var t = 0
         while (t < size) {
-          blob_pointer.setFloat(dtypeSize * t, blob.data(t))
+          blob_pointer.setFloat(dtypeSize * t, byteIn.readFloat())
           t += 1
         }
       }
     }
+    byteIn.close()
   }
 
   private def setData(in: Seq[Minibatch]) = {
@@ -76,23 +81,29 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
     labelCallback.minibatches = Option(in.map(_.label).toIterator)
   }
 
-  private def caffeToWeights = {
-    val w = for (i <- 0 to numLayers - 1) yield {
-      layerNames(i) -> (for (j <- 0 to layerNumBlobs(i) - 1) yield {
+  private def caffeToWeights: Array[Byte]= {
+    val byteOut = new ByteArrayOutputStream()
+    val out = new DataOutputStream(byteOut)
+    out.writeInt(numLayers)
+    for (i <- 0 until numLayers) {
+      out.writeUTF(layerNames(i))
+      out.writeInt(layerNumBlobs(i))
+      for (j <- 0 until layerNumBlobs(i))  {
         val blob = caffeLib.get_weight_blob(state, i, j)
         val shape = getShape(blob)
-        val data = new Array[Float](shape.product)
+        out.writeInt(shape.length)
+        for(s<-shape) out.writeInt(s)
         val blob_pointer = caffeLib.get_data(blob)
         val size = shape.product
         var t = 0
         while (t < size) {
-          data(t) = blob_pointer.getFloat(dtypeSize * t)
+          out.writeFloat(blob_pointer.getFloat(dtypeSize * t))
           t += 1
         }
-        Blob(shape, data)
-      })
+      }
     }
-    w.toMap
+    out.close()
+    byteOut.toByteArray
   }
 
   /**
@@ -151,21 +162,11 @@ class CaffeNet(libLocation: String, solverParam: Array[Byte]) extends Serializab
   }
 
 
-  /*def forward() = {
-    caffeLib.set_mode_cpu()
-    caffeLib.forward(state)
-  }
-
-  def backward() = {
-    caffeLib.set_mode_cpu()
-    caffeLib.backward(state)
-  }*/
-
-  def setWeights(w: Weights) = {
+  def setWeights(w: Array[Byte]) = {
     weightCache = w
   }
 
-  def getWeights(): Weights = {
+  def getWeights(): Array[Byte] = {
     weightCache
   }
 
