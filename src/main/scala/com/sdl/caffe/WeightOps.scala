@@ -27,7 +27,9 @@ object WeightOps{
   private val conf = new Configuration()
   conf.setEnum("zlib.compress.level", CompressionLevel.BEST_SPEED)
   codec.setConf(conf) // If not set it will generate a null pointer exception
-  private val codecOpt = Option(codec)
+  // Using compression slows everything down. Probably due to the native libs not
+  // being available until centos 6
+  private val codecOpt = None //Option(codec)
 
   private def applyFunc[S, T](thisIn: S, thatIn: S, op: S => T): (T, T) = (op(thisIn), op(thatIn))
 
@@ -77,7 +79,8 @@ object WeightOps{
         writeShape(thisShape, out)
         for(_ <-0 until thisShape.product){
           val(thisF, thatF) = applyToIn(_.readFloat())
-          out.writeFloat(op(thisF, thatF))
+          val applied = op(thisF, thatF)
+          out.writeFloat(applied)
         }
       }
     }

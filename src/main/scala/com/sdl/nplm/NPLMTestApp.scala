@@ -47,9 +47,13 @@ object NPLMTestApp {
     //computePerplexity(testNet, minibatches)
     //testNet.setWeights(weights)
     //computePerplexity(testNet, minibatches)
-    /*println("Testing ops")
+    /*println("Testing ops")  */
+    val kryo = new Kryo();
     val zeros = WeightOps.subtract(randomWeights,randomWeights)
-    println("testing summed")
+    val outZeros = new Output(new FileOutputStream("/tmp/zeros.bin"));
+    kryo.writeObject(outZeros, zeros)
+    outZeros.close()
+    /*println("testing summed")
     val summed =   WeightOps.diffAdd(zeros, WeightOps.scalarDivide(zeros,1))
     val newWeights = WeightOps.netAdd(randomWeights, summed)
     testNet.setWeights(newWeights)            */
@@ -61,7 +65,6 @@ object NPLMTestApp {
     //computePerplexity(testNet, minibatches)
     println("starting subtract")
     val diff = WeightOps.subtract(trained, randomWeights)
-    val kryo = new Kryo();
     val output = new Output(new FileOutputStream("/tmp/diff_large_vocab.bin"));
     kryo.writeObject(output, diff)
     output.close()

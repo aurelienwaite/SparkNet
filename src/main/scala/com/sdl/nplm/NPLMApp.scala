@@ -13,6 +13,7 @@ import org.apache.spark.{SparkConf, SparkContext, SparkEnv}
 import org.apache.spark.mllib.linalg
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Row
+import org.apache.spark.storage.StorageLevel
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
@@ -172,7 +173,7 @@ object NPLMApp {
       .setAppName("CaffeNPLM")
       .setIfMissing("spark.driver.maxResultSize", "15G")
       .setIfMissing("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-      .setIfMissing("spark.kryoserializer.buffer.max", "512m")
+      .setIfMissing("spark.kryoserializer.buffer.max", "1536m")
     val sc = new SparkContext(conf)
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
 
@@ -251,6 +252,9 @@ object NPLMApp {
       def iterate(update: Array[Byte], iterationCounter: Int): Array[Byte] = {
         val i = numIterations - iterationCounter
         if(i % perplexityInterval == 0 ) {
+          val snapshotPath = s"$snapshotPrefix/sparknet_epoch_${numEpochs - epochCounter}_iter_$i"
+          logNplm(s"saving weights to $snapshotPath")
+          driverNet.saveWeightsToFile(snapshotPath)
           val perplexity = computePerplexity(nets, devSetRDD, devSetMinibatches.length)
           logNplm(s"For iteration $i perplexity: $perplexity")
         }
@@ -275,13 +279,7 @@ object NPLMApp {
         logNplm("collecting weights")
         def reducer(a:(Array[Byte], Duration, Set[String]), b:(Array[Byte], Duration, Set[String])) =
           (diffAdd(a._1, b._1), a._2 max b._2, a._3 union b._3)
-        /*val repartitioned = trained.repartition(coalescedModels)(repartitionOrdering)
-          .persist(StorageLevel.MEMORY_ONLY_SER)
-        val reduced = repartitioned.mapPartitions{ iter =>
-          Iterator(iter.reduce(reducer(_,_)))
-        }.persist(StorageLevel.MEMORY_ONLY_SER)*/
-        //val (diff, elapsed, terminatedExecutors) = reduced.reduce(reducer(_,_))
-        val (diff, elapsed, terminatedExecutors) = trained.treeReduce(reducer, 2)
+        val (diff, elapsed, terminatedExecutors) = trained.treeReduce(reducer, 3)
         logNplm(s"caffe library completed in ${elapsed.toMinutes} minutes")
         logNplm(s"The following executors were took longer than the max time: $terminatedExecutors")
         val divided = scalarDivide(diff, numWorkers.toFloat)
@@ -289,7 +287,7 @@ object NPLMApp {
         if (iterationCounter == 1)
           driverNet.getWeights()
         else
-          iterate(diff, iterationCounter - 1)
+          iterate(divided, iterationCounter - 1)
       }
       val optimisedWeights = iterate(subtract(driverNet.getWeights(), driverNet.getWeights()), numIterations)
       minibatched.unpersist()
